@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: panel_web
+    restart: always
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+      # ПРОКИДАЄМО СОКЕТ DOCKER, ЩОБ КЕРУВАТИ ІНШИМИ КОНТЕЙНЕРАМИ
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DATABASE_URL=postgresql://admin:admin_pass@db:5432/panel_db
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15-alpine
+    container_name: panel_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin_pass
+      POSTGRES_DB: panel_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:

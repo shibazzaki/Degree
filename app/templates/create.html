@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card bg-secondary text-white">
+            <div class="card-header">Новий ігровий сервер</div>
+            <div class="card-body">
+                <form method="POST">
+                    {{ form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ form.name.label(class="form-label") }}
+                        {{ form.name(class="form-control") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.game_id.label(class="form-label") }}
+                        {{ form.game_id(class="form-select") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.ram.label(class="form-label") }}
+                        {{ form.ram(class="form-control") }}
+                        <div class="form-text text-light">Рекомендовано мінімум 1024 MB для Minecraft.</div>
+                    </div>
+                    {{ form.submit(class="btn btn-success w-100") }}
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Мої сервери</h2>
+    <a href="{{ url_for('create_server') }}" class="btn btn-success">+ Створити сервер</a>
+</div>
+
+<div class="row">
+    {% for server in servers %}
+    <div class="col-md-4 mb-4">
+        <div class="card bg-secondary text-white h-100">
+            <div class="card-header d-flex justify-content-between">
+                <span>{{ server.name }}</span>
+                <span class="badge {% if server.status == 'running' %}bg-success{% else %}bg-danger{% endif %}">
+                    {{ server.status }}
+                </span>
+            </div>
+            <div class="card-body">
+                <h5 class="card-title">{{ server.template.name }}</h5>
+                <p class="card-text">
+                    <strong>Port:</strong> {{ server.assigned_ports.get('main') }}<br>
+                    <strong>RAM:</strong> {{ server.allocated_ram }} MB
+                </p>
+                <a href="#" class="btn btn-light btn-sm">Управління</a>
+                <a href="#" class="btn btn-danger btn-sm">Видалити</a>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12 text-center mt-5">
+        <h4 class="text-muted">У вас поки немає серверів. Створіть перший!</h4>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
