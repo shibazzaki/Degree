@@ -110,7 +110,7 @@ def seed_db():
             'env': {'EULA': 'TRUE', 'VERSION': 'LATEST'}
         },
         {
-            'name': 'Project Zomboid',  
+            'name': 'Project Zomboid',
             'docker_image': 'renegademaster/zomboid-dedicated-server',
             # Вказуємо всі три порти, які потрібні грі
             'ports': {'16261': 'udp', '16262': 'udp', '8766': 'udp'},
