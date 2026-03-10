@@ -62,3 +62,5 @@ class GameServer(db.Model):
     env_vars = db.Column(JSONB, nullable=True)
 
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
+
+    template = db.relationship('GameTemplate', backref='servers')

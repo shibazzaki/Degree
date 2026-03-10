@@ -14,7 +14,7 @@
 
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark border-bottom border-secondary">
       <div class="container-fluid">
-        <a class="navbar-brand" href="{{ url_for('index') }}">🎮 GameServer Panel</a>
+        <a class="navbar-brand" href="{{ url_for('main.index') }}">🎮 GameServer Panel</a>
         <div class="collapse navbar-collapse" id="navbarNav">
           <ul class="navbar-nav ms-auto">
             {% if current_user.is_authenticated %}
@@ -22,11 +22,11 @@
                     <span class="nav-link">Привіт, {{ current_user.username }}</span>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link text-danger" href="{{ url_for('logout') }}">Вийти</a>
+                    <a class="nav-link text-danger" href="{{ url_for('main.logout') }}">Вийти</a>
                 </li>
             {% else %}
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('login') }}">Вхід</a></li>
-                <li class="nav-item"><a class="nav-link" href="{{ url_for('register') }}">Реєстрація</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('main.login') }}">Вхід</a></li>
+                <li class="nav-item"><a class="nav-link" href="{{ url_for('main.register') }}">Реєстрація</a></li>
             {% endif %}
           </ul>
         </div>
