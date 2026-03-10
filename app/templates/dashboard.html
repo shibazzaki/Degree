@@ -19,7 +19,11 @@
             <div class="card-body">
                 <h5 class="card-title">{{ server.template.name }}</h5>
                 <p class="card-text">
-                    <strong>Port:</strong> {{ server.assigned_ports.get('main') }}<br>
+                    <strong>Ports:</strong>
+                    {% for internal, external in server.assigned_ports.items() %}
+                        <span class="badge bg-dark">{{ external }}</span>
+                    {% endfor %}
+                    <br>
                     <strong>RAM:</strong> {{ server.allocated_ram }} MB
                 </p>
                 <a href="{{ url_for('main.server_details', server_id=server.id) }}" class="btn btn-primary btn-sm">Управління</a>

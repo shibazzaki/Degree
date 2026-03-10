@@ -64,29 +64,45 @@ def create_server():
         # 2. Запускаємо Docker контейнер
         client = docker.from_env()
         try:
-            # Формуємо словник портів для Docker-py (наприклад: {'16261/udp': 30000, '16262/udp': 30001})
-            docker_ports = {}
             assigned_ports_db = {}
-            current_external_port = external_port
 
-            for internal_port, protocol in template.default_ports.items():
-                port_key = f"{internal_port}/{protocol}"
-                docker_ports[port_key] = current_external_port
-                assigned_ports_db[internal_port] = current_external_port
-                current_external_port += 1  # Для наступного порту беремо +1
+            # Якщо це Zomboid, він краще працює в режимі host network
+            if template.name == 'Project Zomboid':
+                # Записуємо стандартні порти в БД для відображення
+                assigned_ports_db = {'16261': 16261, '16262': 16262}
+                new_server.assigned_ports = assigned_ports_db
 
-            # Оновлюємо порти в базі (щоб ми бачили їх у дашборді)
-            new_server.assigned_ports = assigned_ports_db
+                container = client.containers.run(
+                    image=template.docker_image,
+                    detach=True,
+                    name=f"server_{new_server.uuid}",
+                    network_mode="host",  # ВАЖЛИВО! Контейнер використовує IP ноутбука
+                    environment=template.default_env_vars,
+                    mem_limit=f"{form.ram.data}m",
+                    restart_policy={"Name": "on-failure"}
+                )
+            else:
+                # Для Minecraft та інших ігор залишаємо стару логіку прокидання портів
+                docker_ports = {}
+                current_external_port = external_port
 
-            container = client.containers.run(
-                image=template.docker_image,
-                detach=True,
-                name=f"server_{new_server.uuid}",
-                ports=docker_ports,  # Тепер тут динамічні порти з правильними протоколами
-                environment=template.default_env_vars,
-                mem_limit=f"{form.ram.data}m",
-                restart_policy={"Name": "on-failure"}
-            )
+                for internal_port, protocol in template.default_ports.items():
+                    port_key = f"{internal_port}/{protocol}"
+                    docker_ports[port_key] = current_external_port
+                    assigned_ports_db[internal_port] = current_external_port
+                    current_external_port += 1
+
+                new_server.assigned_ports = assigned_ports_db
+
+                container = client.containers.run(
+                    image=template.docker_image,
+                    detach=True,
+                    name=f"server_{new_server.uuid}",
+                    ports=docker_ports,
+                    environment=template.default_env_vars,
+                    mem_limit=f"{form.ram.data}m",
+                    restart_policy={"Name": "on-failure"}
+                )
 
             new_server.status = 'running'
             db.session.commit()

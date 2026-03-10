@@ -20,7 +20,11 @@
             <ul class="list-group list-group-flush">
                 <li class="list-group-item bg-dark text-white">Status: <span id="status-badge" class="badge bg-info">{{ server.status }}</span></li>
                 <li class="list-group-item bg-dark text-white">IP: 127.0.0.1</li>
-                <li class="list-group-item bg-dark text-white">Port: <strong>{{ server.assigned_ports.get('main') }}</strong></li>
+                <li class="list-group-item bg-dark text-white">Ports:
+                    {% for internal, external in server.assigned_ports.items() %}
+                        <span class="badge bg-primary">{{ external }}</span>
+                    {% endfor %}
+                </li>
                 <li class="list-group-item bg-dark text-white">RAM: {{ server.allocated_ram }} MB</li>
             </ul>
         </div>
