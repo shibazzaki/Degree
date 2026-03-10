@@ -64,45 +64,28 @@ def create_server():
         # 2. Запускаємо Docker контейнер
         client = docker.from_env()
         try:
+            docker_ports = {}
             assigned_ports_db = {}
+            current_external_port = external_port
 
-            # Якщо це Zomboid, він краще працює в режимі host network
-            if template.name == 'Project Zomboid':
-                # Записуємо стандартні порти в БД для відображення
-                assigned_ports_db = {'16261': 16261, '16262': 16262}
-                new_server.assigned_ports = assigned_ports_db
+            # Динамічно розподіляємо зовнішні порти для всіх внутрішніх
+            for internal_port, protocol in template.default_ports.items():
+                port_key = f"{internal_port}/{protocol}"
+                docker_ports[port_key] = current_external_port
+                assigned_ports_db[internal_port] = current_external_port
+                current_external_port += 1
 
-                container = client.containers.run(
-                    image=template.docker_image,
-                    detach=True,
-                    name=f"server_{new_server.uuid}",
-                    network_mode="host",  # ВАЖЛИВО! Контейнер використовує IP ноутбука
-                    environment=template.default_env_vars,
-                    mem_limit=f"{form.ram.data}m",
-                    restart_policy={"Name": "on-failure"}
-                )
-            else:
-                # Для Minecraft та інших ігор залишаємо стару логіку прокидання портів
-                docker_ports = {}
-                current_external_port = external_port
+            new_server.assigned_ports = assigned_ports_db
 
-                for internal_port, protocol in template.default_ports.items():
-                    port_key = f"{internal_port}/{protocol}"
-                    docker_ports[port_key] = current_external_port
-                    assigned_ports_db[internal_port] = current_external_port
-                    current_external_port += 1
-
-                new_server.assigned_ports = assigned_ports_db
-
-                container = client.containers.run(
-                    image=template.docker_image,
-                    detach=True,
-                    name=f"server_{new_server.uuid}",
-                    ports=docker_ports,
-                    environment=template.default_env_vars,
-                    mem_limit=f"{form.ram.data}m",
-                    restart_policy={"Name": "on-failure"}
-                )
+            container = client.containers.run(
+                image=template.docker_image,
+                detach=True,
+                name=f"server_{new_server.uuid}",
+                ports=docker_ports,  # Передаємо згенеровані порти
+                environment=template.default_env_vars,
+                mem_limit=f"{form.ram.data}m",
+                restart_policy={"Name": "on-failure"}
+            )
 
             new_server.status = 'running'
             db.session.commit()
@@ -127,14 +110,13 @@ def seed_db():
             'env': {'EULA': 'TRUE', 'VERSION': 'LATEST'}
         },
         {
-            'name': 'Project Zomboid',
+            'name': 'Project Zomboid',  
             'docker_image': 'renegademaster/zomboid-dedicated-server',
-            # PZ потребує 16261 (головний) та 16262 (direct connect) по UDP
-            'ports': {'16261': 'udp', '16262': 'udp'},
+            # Вказуємо всі три порти, які потрібні грі
+            'ports': {'16261': 'udp', '16262': 'udp', '8766': 'udp'},
             'env': {
                 'ADMIN_PASSWORD': 'admin',
                 'SERVER_NAME': 'MyZomboidServer',
-                # Жорстко лімітуємо Java, щоб вона не виходила за межі контейнера
                 'START_MEMORY': '2048m',
                 'MAX_MEMORY': '4096m'
             }
