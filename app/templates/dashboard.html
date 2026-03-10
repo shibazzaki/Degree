@@ -22,8 +22,8 @@
                     <strong>Port:</strong> {{ server.assigned_ports.get('main') }}<br>
                     <strong>RAM:</strong> {{ server.allocated_ram }} MB
                 </p>
-                <a href="#" class="btn btn-light btn-sm">Управління</a>
-                <a href="#" class="btn btn-danger btn-sm">Видалити</a>
+                <a href="{{ url_for('main.server_details', server_id=server.id) }}" class="btn btn-primary btn-sm">Управління</a>
+                <a href="{{ url_for('main.delete_server', server_id=server.id) }}" class="btn btn-danger btn-sm" onclick="return confirm('Ви точно хочете видалити цей сервер? Дані будуть втрачені!');">Видалити</a>
             </div>
         </div>
     </div>

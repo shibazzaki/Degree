@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from . import db, login_manager
@@ -174,3 +174,103 @@ def dashboard():
 def logout():
     logout_user()
     return redirect(url_for('main.login'))
+
+
+# --- УПРАВЛІННЯ СЕРВЕРОМ ---
+
+@bp.route('/server/<int:server_id>')
+@login_required
+def server_details(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    # Перевірка прав доступу (щоб не лазили в чужі сервери)
+    if server.owner_id != current_user.id:
+        abort(403)
+    return render_template('server_details.html', server=server)
+
+
+@bp.route('/server/<int:server_id>/<action>')
+@login_required
+def server_action(server_id, action):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        abort(403)
+
+    client = docker.from_env()
+    container_name = f"server_{server.uuid}"
+
+    try:
+        container = client.containers.get(container_name)
+
+        if action == 'start':
+            container.start()
+            server.status = 'running'
+            flash('Сервер запускається...', 'success')
+        elif action == 'stop':
+            container.stop()
+            server.status = 'stopped'
+            flash('Сервер зупинено.', 'warning')
+        elif action == 'restart':
+            container.restart()
+            server.status = 'running'
+            flash('Сервер перезавантажено.', 'info')
+        elif action == 'kill':
+            container.kill()
+            server.status = 'stopped'
+            flash('Сервер примусово вбито.', 'danger')
+
+        db.session.commit()
+
+    except docker.errors.NotFound:
+        server.status = 'error'
+        db.session.commit()
+        flash('Контейнер не знайдено! Можливо, він був видалений вручну.', 'danger')
+    except Exception as e:
+        flash(f'Помилка виконання дії: {e}', 'danger')
+
+    return redirect(url_for('main.server_details', server_id=server.id))
+
+
+@bp.route('/server/<int:server_id>/delete')
+@login_required
+def delete_server(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        abort(403)
+
+    client = docker.from_env()
+    container_name = f"server_{server.uuid}"
+
+    # Спробуємо видалити контейнер
+    try:
+        try:
+            container = client.containers.get(container_name)
+            container.stop()
+            container.remove()
+        except docker.errors.NotFound:
+            pass  # Якщо контейнера вже немає, просто видаляємо з БД
+
+        db.session.delete(server)
+        db.session.commit()
+        flash('Сервер успішно видалено.', 'success')
+    except Exception as e:
+        flash(f'Помилка видалення: {e}', 'danger')
+
+    return redirect(url_for('main.dashboard'))
+
+
+@bp.route('/server/<int:server_id>/logs')
+@login_required
+def server_logs(server_id):
+    """AJAX маршрут для отримання логів"""
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        return jsonify({'error': 'Access denied'}), 403
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+        # Отримуємо останні 100 рядків логів
+        logs = container.logs(tail=100).decode('utf-8')
+        return jsonify({'logs': logs, 'status': container.status})
+    except Exception as e:
+        return jsonify({'logs': f"Error fetching logs: {e}", 'status': 'unknown'})

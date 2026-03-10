@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-md-12 d-flex justify-content-between align-items-center">
+        <h2>🖥 {{ server.name }} <span class="badge bg-secondary text-lowercase">{{ server.template.name }}</span></h2>
+        <div>
+            <a href="{{ url_for('main.server_action', server_id=server.id, action='start') }}" class="btn btn-success">Start</a>
+            <a href="{{ url_for('main.server_action', server_id=server.id, action='restart') }}" class="btn btn-warning">Restart</a>
+            <a href="{{ url_for('main.server_action', server_id=server.id, action='stop') }}" class="btn btn-danger">Stop</a>
+            <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-light ms-2">Назад</a>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-3">
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header">Інформація</div>
+            <ul class="list-group list-group-flush">
+                <li class="list-group-item bg-dark text-white">Status: <span id="status-badge" class="badge bg-info">{{ server.status }}</span></li>
+                <li class="list-group-item bg-dark text-white">IP: 127.0.0.1</li>
+                <li class="list-group-item bg-dark text-white">Port: <strong>{{ server.assigned_ports.get('main') }}</strong></li>
+                <li class="list-group-item bg-dark text-white">RAM: {{ server.allocated_ram }} MB</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="col-md-9">
+        <div class="card bg-black text-white font-monospace">
+            <div class="card-header border-secondary d-flex justify-content-between">
+                <span>Console Output</span>
+                <small class="text-muted">Auto-refreshing...</small>
+            </div>
+            <div class="card-body p-0">
+                <textarea id="console-logs" class="form-control bg-black text-success border-0" 
+                          style="height: 500px; resize: none; font-family: 'Consolas', monospace; font-size: 0.9rem;" 
+                          readonly>Connecting to logs...</textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Функція для оновлення логів
+    function updateLogs() {
+        fetch("{{ url_for('main.server_logs', server_id=server.id) }}")
+            .then(response => response.json())
+            .then(data => {
+                const consoleArea = document.getElementById('console-logs');
+                const statusBadge = document.getElementById('status-badge');
+                
+                // Оновлюємо текст логів
+                // Якщо користувач не скролив вгору, автоскролимо вниз
+                const isScrolledToBottom = consoleArea.scrollHeight - consoleArea.clientHeight <= consoleArea.scrollTop + 1;
+                
+                consoleArea.value = data.logs;
+                statusBadge.innerText = data.status;
+
+                if(isScrolledToBottom) {
+                    consoleArea.scrollTop = consoleArea.scrollHeight;
+                }
+            })
+            .catch(error => console.error('Error fetching logs:', error));
+    }
+
+    // Запускаємо оновлення кожні 2 секунди
+    setInterval(updateLogs, 2000);
+    // І запускаємо одразу при завантаженні
+    updateLogs();
+</script>
+{% endblock %}
