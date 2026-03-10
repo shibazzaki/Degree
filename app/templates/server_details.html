@@ -28,9 +28,15 @@
 
     <div class="col-md-9">
         <div class="card bg-black text-white font-monospace">
-            <div class="card-header border-secondary d-flex justify-content-between">
+            <div class="card-header border-secondary d-flex justify-content-between align-items-center">
                 <span>Console Output</span>
-                <small class="text-muted">Auto-refreshing...</small>
+                <div>
+                    <a href="{{ url_for('main.download_logs', server_id=server.id) }}" class="btn btn-sm btn-outline-info me-3">
+                        ⬇ Завантажити .txt
+                    </a>
+                    <span id="status-indicator" class="spinner-grow spinner-grow-sm text-success" role="status" aria-hidden="true"></span>
+                    <small class="text-muted ms-1">Live</small>
+                </div>
             </div>
             <div class="card-body p-0">
                 <textarea id="console-logs" class="form-control bg-black text-success border-0" 

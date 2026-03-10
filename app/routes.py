@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, abort
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, abort, Response
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from . import db, login_manager
@@ -61,17 +61,28 @@ def create_server():
         db.session.add(new_server)
         db.session.commit()
 
+        # 2. Запускаємо Docker контейнер
         client = docker.from_env()
         try:
-            internal_port = list(template.default_ports.keys())[0]
+            # Формуємо словник портів для Docker-py (наприклад: {'16261/udp': 30000, '16262/udp': 30001})
+            docker_ports = {}
+            assigned_ports_db = {}
+            current_external_port = external_port
 
-            # Важливо: network_mode="host" або прокидання портів.
-            # Для простоти поки залишаємо ports.
+            for internal_port, protocol in template.default_ports.items():
+                port_key = f"{internal_port}/{protocol}"
+                docker_ports[port_key] = current_external_port
+                assigned_ports_db[internal_port] = current_external_port
+                current_external_port += 1  # Для наступного порту беремо +1
+
+            # Оновлюємо порти в базі (щоб ми бачили їх у дашборді)
+            new_server.assigned_ports = assigned_ports_db
+
             container = client.containers.run(
                 image=template.docker_image,
                 detach=True,
                 name=f"server_{new_server.uuid}",
-                ports={f"{internal_port}/tcp": external_port},
+                ports=docker_ports,  # Тепер тут динамічні порти з правильними протоколами
                 environment=template.default_env_vars,
                 mem_limit=f"{form.ram.data}m",
                 restart_policy={"Name": "on-failure"}
@@ -79,7 +90,7 @@ def create_server():
 
             new_server.status = 'running'
             db.session.commit()
-            flash(f'Сервер {new_server.name} успішно запущено на порті {external_port}!', 'success')
+            flash(f'Сервер {new_server.name} успішно запущено!', 'success')
             return redirect(url_for('main.dashboard'))
 
         except Exception as e:
@@ -102,14 +113,20 @@ def seed_db():
         {
             'name': 'Project Zomboid',
             'docker_image': 'renegademaster/zomboid-dedicated-server',
-            'ports': {'16261': 'udp'},  # Zomboid використовує UDP
-            'env': {'ADMIN_PASSWORD': 'admin', 'SERVER_NAME': 'MyZomboidServer'}
+            # PZ потребує 16261 (головний) та 16262 (direct connect) по UDP
+            'ports': {'16261': 'udp', '16262': 'udp'},
+            'env': {
+                'ADMIN_PASSWORD': 'admin',
+                'SERVER_NAME': 'MyZomboidServer',
+                # Жорстко лімітуємо Java, щоб вона не виходила за межі контейнера
+                'START_MEMORY': '2048m',
+                'MAX_MEMORY': '4096m'
+            }
         }
     ]
 
     added_count = 0
     for game in games:
-        # Перевіряємо, чи існує вже такий шаблон
         if not GameTemplate.query.filter_by(name=game['name']).first():
             new_template = GameTemplate(
                 name=game['name'],
@@ -274,3 +291,27 @@ def server_logs(server_id):
         return jsonify({'logs': logs, 'status': container.status})
     except Exception as e:
         return jsonify({'logs': f"Error fetching logs: {e}", 'status': 'unknown'})
+
+
+@bp.route('/server/<int:server_id>/download_logs')
+@login_required
+def download_logs(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        abort(403)
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+        # Беремо всі логи з контейнера (не тільки останні 100)
+        logs = container.logs().decode('utf-8')
+
+        # Повертаємо текстовий файл "на льоту"
+        return Response(
+            logs,
+            mimetype="text/plain",
+            headers={"Content-disposition": f"attachment; filename=server_{server.name}_logs.txt"}
+        )
+    except Exception as e:
+        flash(f'Помилка завантаження логів: {e}', 'danger')
+        return redirect(url_for('main.server_details', server_id=server.id))
