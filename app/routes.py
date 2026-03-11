@@ -53,12 +53,14 @@ def create_server():
         template = GameTemplate.query.get(form.game_id.data)
         external_port = find_free_port()
 
+        # 1. Створюємо запис у БД
         new_server = GameServer(
             name=form.name.data,
             owner_id=current_user.id,
             template_id=template.id,
             allocated_ram=form.ram.data,
-            assigned_ports={'main': external_port},
+            assigned_ports={'main': external_port},  # Тимчасовий запис
+            env_vars=template.default_env_vars,  # <--- ЗБЕРІГАЄМО КОНФІГ В БД
             status='starting'
         )
         db.session.add(new_server)
@@ -71,7 +73,6 @@ def create_server():
             assigned_ports_db = {}
             current_external_port = external_port
 
-            # Динамічно розподіляємо зовнішні порти для всіх внутрішніх
             for internal_port, protocol in template.default_ports.items():
                 port_key = f"{internal_port}/{protocol}"
                 docker_ports[port_key] = current_external_port
@@ -80,13 +81,18 @@ def create_server():
 
             new_server.assigned_ports = assigned_ports_db
 
+            # --- ВИЗНАЧАЄМО ШЛЯХ ДЛЯ ЗБЕРЕЖЕННЯ СВІТУ ---
+            bind_path = '/data' if 'Minecraft' in template.name else '/home/steam/Zomboid'
+            volume_name = f"server_data_{new_server.uuid}"
+
             container = client.containers.run(
                 image=template.docker_image,
                 detach=True,
                 name=f"server_{new_server.uuid}",
-                ports=docker_ports,  # Передаємо згенеровані порти
-                environment=template.default_env_vars,
+                ports=docker_ports,
+                environment=new_server.env_vars,  # <--- Беремо конфіг з БД
                 mem_limit=f"{form.ram.data}m",
+                volumes={volume_name: {'bind': bind_path, 'mode': 'rw'}},  # <--- ДАНІ ТЕПЕР У БЕЗПЕЦІ
                 restart_policy={"Name": "on-failure"}
             )
 
@@ -240,6 +246,34 @@ def server_action(server_id, action):
             container.kill()
             server.status = 'stopped'
             flash('Сервер примусово вбито.', 'danger')
+        elif action == 'kill':
+            container.kill()
+            server.status = 'stopped'
+            flash('Сервер примусово вбито.', 'danger')
+
+            # --- НОВИЙ ЕКШЕН ---
+        elif action == 'rebuild':
+            container.stop()
+            container.remove()  # Видаляємо старий контейнер
+
+            # Створюємо новий з новими налаштуваннями
+            bind_path = '/data' if 'Minecraft' in server.template.name else '/home/steam/Zomboid'
+            volume_name = f"server_data_{server.uuid}"
+            docker_ports = {f"{k}/udp" if 'Zomboid' in server.template.name else f"{k}/tcp": v for k, v in
+                            server.assigned_ports.items()}
+
+            client.containers.run(
+                image=server.template.docker_image,
+                detach=True,
+                name=container_name,
+                ports=docker_ports,
+                environment=server.env_vars,  # Беремо свіжі налаштування з БД
+                mem_limit=f"{server.allocated_ram}m",
+                volumes={volume_name: {'bind': bind_path, 'mode': 'rw'}},
+                restart_policy={"Name": "on-failure"}
+            )
+            server.status = 'running'
+            flash('Сервер перезібрано з новими налаштуваннями!', 'success')
 
         db.session.commit()
 
@@ -413,3 +447,24 @@ def send_rcon(server_id):
 
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
+
+
+@bp.route('/server/<int:server_id>/settings', methods=['POST'])
+@login_required
+def update_settings(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        abort(403)
+
+    # Збираємо всі поля з форми, окрім CSRF токенів
+    updated_env = {}
+    for key, value in request.form.items():
+        if key != 'csrf_token':
+            updated_env[key] = value
+
+    # Оновлюємо JSON у базі
+    server.env_vars = updated_env
+    db.session.commit()
+
+    flash("Налаштування збережено! Щоб вони запрацювали, натисніть 'Rebuild' (Перезібрати).", "success")
+    return redirect(url_for('main.server_details', server_id=server.id))
