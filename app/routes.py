@@ -8,6 +8,8 @@ import docker
 import socket
 import random
 from mcrcon import MCRcon
+import os
+import requests
 
 # Створюємо Blueprint замість app
 bp = Blueprint('main', __name__)
@@ -295,6 +297,54 @@ def server_logs(server_id):
         return jsonify({'logs': logs, 'status': container.status})
     except Exception as e:
         return jsonify({'logs': f"Error fetching logs: {e}", 'status': 'unknown'})
+
+
+@bp.route('/server/<int:server_id>/stats')
+@login_required
+def server_stats(server_id):
+    """Отримує метрики CPU та RAM напряму від Docker API"""
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        return jsonify({'status': 'error', 'message': 'Access denied'}), 403
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+
+        # Якщо сервер не запущений, немає сенсу брати статистику
+        if container.status != 'running':
+            return jsonify({'status': 'error', 'message': 'Container is stopped'})
+
+        # Отримуємо статистику (stream=False бере один "знімок" даних)
+        stats = container.stats(stream=False)
+
+        # --- РОЗРАХУНОК RAM ---
+        mem_stats = stats.get('memory_stats', {})
+        ram_usage = mem_stats.get('usage', 0)
+        ram_mb = round(ram_usage / (1024 * 1024), 2)
+
+        # --- РОЗРАХУНОК CPU (%) ---
+        cpu_stats = stats.get('cpu_stats', {})
+        precpu_stats = stats.get('precpu_stats', {})
+
+        cpu_delta = cpu_stats.get('cpu_usage', {}).get('total_usage', 0) - precpu_stats.get('cpu_usage', {}).get(
+            'total_usage', 0)
+        system_delta = cpu_stats.get('system_cpu_usage', 0) - precpu_stats.get('system_cpu_usage', 0)
+
+        cpu_percent = 0.0
+        if system_delta > 0 and cpu_delta > 0:
+            percpu_usage = cpu_stats.get('cpu_usage', {}).get('percpu_usage', [])
+            num_cores = len(percpu_usage) if percpu_usage else os.cpu_count() or 1
+            cpu_percent = (cpu_delta / system_delta) * num_cores * 100.0
+
+        return jsonify({
+            'status': 'success',
+            'ram_mb': ram_mb,
+            'cpu_percent': round(cpu_percent, 2)
+        })
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
 
 @bp.route('/server/<int:server_id>/download_logs')

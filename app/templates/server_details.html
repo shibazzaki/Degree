@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <div class="row mb-3">
     <div class="col-md-12 d-flex justify-content-between align-items-center">
         <h2>🖥 {{ server.name }} <span class="badge bg-secondary text-lowercase">{{ server.template.name }}</span></h2>
@@ -25,8 +26,15 @@
                         <span class="badge bg-primary">{{ external }}</span>
                     {% endfor %}
                 </li>
-                <li class="list-group-item bg-dark text-white">RAM: {{ server.allocated_ram }} MB</li>
+                <li class="list-group-item bg-dark text-white">Max RAM: {{ server.allocated_ram }} MB</li>
             </ul>
+        </div>
+
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header">Використання RAM (MB)</div>
+            <div class="card-body p-2">
+                <canvas id="ramChart" height="200"></canvas>
+            </div>
         </div>
     </div>
 
@@ -113,5 +121,99 @@
         })
         .catch(error => console.error('Error:', error));
     });
+
+
+    // --- НАЛАШТУВАННЯ ГРАФІКА CHART.JS (RAM + CPU) ---
+    const ctx = document.getElementById('ramChart').getContext('2d');
+    const systemChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [], // Часові мітки
+            datasets: [
+                {
+                    label: 'RAM (MB)',
+                    data: [],
+                    borderColor: '#198754', // Зелений колір (Bootstrap success)
+                    backgroundColor: 'rgba(25, 135, 84, 0.2)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    yAxisID: 'y' // Прив'язка до лівої осі
+                },
+                {
+                    label: 'CPU (%)',
+                    data: [],
+                    borderColor: '#0dcaf0', // Блакитний колір (Bootstrap info)
+                    backgroundColor: 'rgba(13, 202, 240, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    yAxisID: 'y1' // Прив'язка до правої осі
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            scales: {
+                x: { display: false }, // Ховаємо вісь Х
+                y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    beginAtZero: true,
+                    suggestedMax: {{ server.allocated_ram }}, // Максимум RAM
+                    grid: { color: '#495057' },
+                    title: { display: true, text: 'RAM (MB)' }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    beginAtZero: true,
+                    suggestedMax: 100, // Рекомендований максимум CPU - 100%
+                    grid: { drawOnChartArea: false }, // Ховаємо сітку, щоб не перетиналася
+                    title: { display: true, text: 'CPU (%)' }
+                }
+            },
+            plugins: {
+                legend: { display: true, labels: { color: '#fff' } }
+            }
+        }
+    });
+
+    // --- ОНОВЛЕННЯ СТАТИСТИКИ (AJAX) ---
+    function updateStats() {
+        fetch("{{ url_for('main.server_stats', server_id=server.id) }}")
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    const now = new Date();
+                    const timeLabel = now.getHours() + ':' + now.getMinutes() + ':' + now.getSeconds();
+
+                    // Додаємо нові дані для обох ліній
+                    systemChart.data.labels.push(timeLabel);
+                    systemChart.data.datasets[0].data.push(data.ram_mb);      // Index 0 - RAM
+                    systemChart.data.datasets[1].data.push(data.cpu_percent); // Index 1 - CPU
+
+                    // Зберігаємо тільки останні 20 точок
+                    if (systemChart.data.labels.length > 20) {
+                        systemChart.data.labels.shift();
+                        systemChart.data.datasets[0].data.shift();
+                        systemChart.data.datasets[1].data.shift();
+                    }
+
+                    systemChart.update();
+                }
+            })
+            .catch(error => console.error('Error fetching stats:', error));
+    }
+
+    // Запускаємо оновлення графіків кожні 5 секунд
+    setInterval(updateStats, 5000);
 </script>
 {% endblock %}

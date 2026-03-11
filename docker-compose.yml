@@ -9,7 +9,6 @@ services:
       - "5000:5000"
     volumes:
       - .:/app
-      # ПРОКИДАЄМО СОКЕТ DOCKER, ЩОБ КЕРУВАТИ ІНШИМИ КОНТЕЙНЕРАМИ
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - DATABASE_URL=postgresql://admin:admin_pass@db:5432/panel_db
@@ -28,6 +27,20 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+
+  # ДОДАЄМО СЕРВІС МОНІТОРИНГУ
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.0 # Стабільна версія
+    container_name: cadvisor
+    restart: always
+    ports:
+      - "8080:8080" # Порт для доступу до метрик
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
 
 volumes:
   postgres_data:
