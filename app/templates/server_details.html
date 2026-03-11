@@ -47,6 +47,12 @@
                           style="height: 500px; resize: none; font-family: 'Consolas', monospace; font-size: 0.9rem;" 
                           readonly>Connecting to logs...</textarea>
             </div>
+            <div class="card-footer bg-black border-secondary">
+                <form id="rcon-form" class="d-flex">
+                    <input type="text" id="rcon-command" class="form-control bg-dark text-white border-secondary me-2" placeholder="Введіть команду (наприклад, say Hello World!)" autocomplete="off">
+                    <button type="submit" class="btn btn-outline-success">Відправити</button>
+                </form>
+            </div>
         </div>
     </div>
 </div>
@@ -78,5 +84,34 @@
     setInterval(updateLogs, 2000);
     // І запускаємо одразу при завантаженні
     updateLogs();
+
+    // Обробка відправки RCON команди
+    document.getElementById('rcon-form').addEventListener('submit', function(e) {
+        e.preventDefault(); // Зупиняємо стандартне перезавантаження сторінки
+
+        const cmdInput = document.getElementById('rcon-command');
+        const cmd = cmdInput.value;
+        if (!cmd) return;
+
+        // Відправляємо запит на наш Python Backend
+        fetch("{{ url_for('main.send_rcon', server_id=server.id) }}", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({command: cmd})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                cmdInput.value = ''; // Очищаємо поле вводу
+                // Одразу оновлюємо логи, щоб побачити результат
+                updateLogs();
+            } else {
+                alert("Помилка: " + data.message);
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    });
 </script>
 {% endblock %}

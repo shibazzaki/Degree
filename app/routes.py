@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, abort, Response
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, abort, Response, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from . import db, login_manager
@@ -7,6 +7,7 @@ from .forms import LoginForm, RegistrationForm, CreateServerForm
 import docker
 import socket
 import random
+from mcrcon import MCRcon
 
 # Створюємо Blueprint замість app
 bp = Blueprint('main', __name__)
@@ -107,7 +108,12 @@ def seed_db():
             'name': 'Minecraft Java',
             'docker_image': 'itzg/minecraft-server',
             'ports': {'25565': 'tcp'},
-            'env': {'EULA': 'TRUE', 'VERSION': 'LATEST'}
+            'env': {
+                'EULA': 'TRUE',
+                'VERSION': 'LATEST',
+                'ENABLE_RCON': 'true',
+                'RCON_PASSWORD': current_app.config['RCON_PASSWORD'] # <--- current_app замість app
+            }
         },
         {
             'name': 'Project Zomboid',
@@ -313,3 +319,47 @@ def download_logs(server_id):
     except Exception as e:
         flash(f'Помилка завантаження логів: {e}', 'danger')
         return redirect(url_for('main.server_details', server_id=server.id))
+
+
+@bp.route('/server/<int:server_id>/rcon', methods=['POST'])
+@login_required
+def send_rcon(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        return jsonify({'status': 'error', 'message': 'Access denied'}), 403
+
+    command = request.json.get('command')
+    if not command:
+        return jsonify({'status': 'error', 'message': 'Empty command'})
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+
+        # Отримуємо ВНУТРІШНІЙ IP контейнера у мережі Docker (щоб не йти через UFW)
+        container.reload()
+        networks = container.attrs['NetworkSettings']['Networks']
+        ip_address = list(networks.values())[0]['IPAddress']
+
+        # Визначаємо порт RCON залежно від гри
+        template_name = server.template.name
+        rcon_port = 25575 if 'Minecraft' in template_name else 27015
+        rcon_pass = current_app.config['RCON_PASSWORD']
+
+        try:
+            # Спроба відправити через класичний протокол RCON
+            with MCRcon(ip_address, rcon_pass, port=rcon_port) as mcr:
+                response = mcr.command(command)
+            return jsonify({'status': 'success', 'response': response})
+        except Exception as rcon_e:
+            # Надійний Fallback (якщо гра ще не підняла RCON порт)
+            # Відправляємо команду напряму через Docker Exec (як у терміналі)
+            if 'Minecraft' in template_name:
+                exit_code, output = container.exec_run(f"rcon-cli {command}")
+            else:
+                exit_code, output = container.exec_run(f"rcon {command}")
+
+            return jsonify({'status': 'success', 'response': output.decode('utf-8')})
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
