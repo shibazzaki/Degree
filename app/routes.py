@@ -10,6 +10,7 @@ import random
 from mcrcon import MCRcon
 import os
 import requests
+import base64
 
 # Створюємо Blueprint замість app
 bp = Blueprint('main', __name__)
@@ -468,3 +469,55 @@ def update_settings(server_id):
 
     flash("Налаштування збережено! Щоб вони запрацювали, натисніть 'Rebuild' (Перезібрати).", "success")
     return redirect(url_for('main.server_details', server_id=server.id))
+
+
+# --- РЕДАКТОР КОНФІГІВ ---
+
+@bp.route('/server/<int:server_id>/config', methods=['GET', 'POST'])
+@login_required
+def server_config(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id:
+        abort(403)
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+    except docker.errors.NotFound:
+        flash("Контейнер не знайдено. Спочатку запустіть сервер.", "danger")
+        return redirect(url_for('main.server_details', server_id=server.id))
+
+    # Визначаємо шлях до конфігу залежно від гри
+    if 'Minecraft' in server.template.name:
+        config_path = '/data/server.properties'
+    else:
+        # Для Zomboid назва файлу залежить від SERVER_NAME
+        server_name = server.env_vars.get('SERVER_NAME', 'servertest')
+        config_path = f'/home/steam/Zomboid/Server/{server_name}.ini'
+
+    # ОБРОБКА ЗБЕРЕЖЕННЯ
+    if request.method == 'POST':
+        new_content = request.form.get('config_content')
+        if new_content is not None:
+            # Кодуємо текст у Base64, щоб Linux не зламався від лапок чи спецсимволів
+            encoded_content = base64.b64encode(new_content.encode('utf-8')).decode('utf-8')
+
+            # Декодуємо і записуємо прямо всередині контейнера
+            write_cmd = f"sh -c 'echo {encoded_content} | base64 -d > \"{config_path}\"'"
+            exit_code, output = container.exec_run(write_cmd)
+
+            if exit_code == 0:
+                flash('Конфігурацію збережено! Натисніть Restart, щоб гра її підтягнула.', 'success')
+            else:
+                flash(f'Помилка збереження: {output.decode("utf-8")}', 'danger')
+
+        return redirect(url_for('main.server_config', server_id=server.id))
+
+    # GET ЗАПИТ: Читаємо поточний файл
+    exit_code, output = container.exec_run(f"cat \"{config_path}\"")
+    if exit_code == 0:
+        config_content = output.decode('utf-8')
+    else:
+        config_content = f"# Файл {config_path} ще не створено.\n# Дочекайтеся повного завантаження сервера (генерації світу), а потім оновіть сторінку."
+
+    return render_template('config_editor.html', server=server, config_content=config_content, config_path=config_path)

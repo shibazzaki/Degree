@@ -9,6 +9,7 @@
             <a href="{{ url_for('main.server_action', server_id=server.id, action='start') }}" class="btn btn-success">Start</a>
             <a href="{{ url_for('main.server_action', server_id=server.id, action='restart') }}" class="btn btn-warning">Restart</a>
             <a href="{{ url_for('main.server_action', server_id=server.id, action='rebuild') }}" class="btn btn-info" onclick="return confirm('Перезібрати контейнер? Світ гри буде збережено, але сервер перезапуститься.');">Rebuild</a>
+            <a href="{{ url_for('main.server_config', server_id=server.id) }}" class="btn btn-outline-warning ms-2">Редагувати Конфіг</a>
             <a href="{{ url_for('main.server_action', server_id=server.id, action='stop') }}" class="btn btn-danger">Stop</a>
             <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline-light ms-2">Назад</a>
         </div>

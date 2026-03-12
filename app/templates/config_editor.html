@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-md-12 d-flex justify-content-between align-items-center">
+        <h2>Редактор файлу: <span class="text-info fs-5">{{ config_path }}</span></h2>
+        <a href="{{ url_for('main.server_details', server_id=server.id) }}" class="btn btn-outline-light">Назад до консолі</a>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12">
+        <div class="card bg-dark border-secondary">
+            <div class="card-header border-secondary text-warning">
+                Увага: Після збереження змін обов'язково перезавантажте (Restart) сервер!
+            </div>
+            <div class="card-body p-0">
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <textarea name="config_content" class="form-control bg-black text-light border-0 rounded-0" 
+                              style="height: 65vh; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.95rem; resize: none;" 
+                              spellcheck="false">{{ config_content }}</textarea>
+                    
+                    <div class="p-3 bg-dark border-top border-secondary d-flex justify-content-end">
+                        <button type="submit" class="btn btn-success px-4">💾 Зберегти конфіг</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
