@@ -11,6 +11,8 @@ from mcrcon import MCRcon
 import os
 import requests
 import base64
+from functools import wraps
+
 
 # Створюємо Blueprint замість app
 bp = Blueprint('main', __name__)
@@ -34,6 +36,13 @@ def load_user(user_id):
     return User.query.get(int(user_id))
 
 
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if current_user.role != 'admin':
+            abort(403) # Повертає помилку 403 Forbidden
+        return f(*args, **kwargs)
+    return decorated_function
 # --- МАРШРУТИ ---
 
 @bp.route('/')
@@ -163,6 +172,11 @@ def login():
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
         if user and check_password_hash(user.password_hash, form.password.data):
+            # --- ПЕРЕВІРКА НА АПРУВ ---
+            if not user.is_approved:
+                flash('Ваш акаунт очікує підтвердження адміністратором.', 'warning')
+                return redirect(url_for('main.login'))
+
             login_user(user)
             return redirect(url_for('main.index'))
         else:
@@ -179,15 +193,31 @@ def register():
     form = RegistrationForm()
     if form.validate_on_submit():
         hashed_password = generate_password_hash(form.password.data)
-        new_user = User(username=form.username.data, email=form.email.data, password_hash=hashed_password)
+
+        # --- ЛОГІКА РОЛЕЙ ---
+        # Якщо в базі ще немає користувачів, перший стає адміном
+        is_first_user = User.query.count() == 0
+        role = 'admin' if is_first_user else 'user'
+        is_approved = True if is_first_user else False
+
+        new_user = User(
+            username=form.username.data,
+            email=form.email.data,
+            password_hash=hashed_password,
+            role=role,
+            is_approved=is_approved
+        )
 
         try:
             db.session.add(new_user)
             db.session.commit()
-            flash('Акаунт створено! Тепер увійдіть.')
+            if is_first_user:
+                flash('Акаунт Адміністратора створено! Можете увійти.', 'success')
+            else:
+                flash('Акаунт створено! Очікуйте на підтвердження адміністратором.', 'info')
             return redirect(url_for('main.login'))
         except:
-            flash('Такий користувач або email вже існує.')
+            flash('Такий користувач або email вже існує.', 'danger')
 
     return render_template('register.html', form=form)
 
@@ -521,3 +551,29 @@ def server_config(server_id):
         config_content = f"# Файл {config_path} ще не створено.\n# Дочекайтеся повного завантаження сервера (генерації світу), а потім оновіть сторінку."
 
     return render_template('config_editor.html', server=server, config_content=config_content, config_path=config_path)
+
+
+# --- ПАНЕЛЬ АДМІНІСТРАТОРА ---
+
+@bp.route('/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    users = User.query.all()
+    return render_template('admin_users.html', users=users)
+
+
+@bp.route('/admin/users/<int:user_id>/toggle_approve')
+@login_required
+@admin_required
+def toggle_approve(user_id):
+    user = User.query.get_or_404(user_id)
+    if user.id == current_user.id:
+        flash("Ви не можете змінити статус самому собі.", "warning")
+        return redirect(url_for('main.admin_users'))
+
+    user.is_approved = not user.is_approved
+    db.session.commit()
+    status = "схвалено" if user.is_approved else "заблоковано"
+    flash(f'Користувача {user.username} {status}.', 'success')
+    return redirect(url_for('main.admin_users'))

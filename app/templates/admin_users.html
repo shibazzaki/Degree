@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>👥 Управління користувачами</h2>
+    </div>
+</div>
+
+<div class="card bg-dark border-secondary">
+    <div class="card-body p-0">
+        <table class="table table-dark table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Логін</th>
+                    <th>Email</th>
+                    <th>Роль</th>
+                    <th>Статус</th>
+                    <th>Дії</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td>{{ u.id }}</td>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.email }}</td>
+                    <td>
+                        <span class="badge {% if u.role == 'admin' %}bg-danger{% else %}bg-secondary{% endif %}">
+                            {{ u.role }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if u.is_approved %}
+                            <span class="badge bg-success">Approved</span>
+                        {% else %}
+                            <span class="badge bg-warning text-dark">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if u.id != current_user.id %}
+                            <a href="{{ url_for('main.toggle_approve', user_id=u.id) }}" class="btn btn-sm {% if u.is_approved %}btn-outline-danger{% else %}btn-success{% endif %}">
+                                {% if u.is_approved %}Заблокувати{% else %}Схвалити{% endif %}
+                            </a>
+                        {% else %}
+                            <span class="text-muted small">Це ви</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

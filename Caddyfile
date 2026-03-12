@@ -1,0 +1,3 @@
+shibazzaki.space, www.shibazzaki.space {
+    reverse_proxy web:5000
+}

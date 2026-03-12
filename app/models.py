@@ -13,6 +13,9 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(100), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     role = db.Column(db.String(20), default='user')  # 'admin' or 'user'
+
+    is_approved = db.Column(db.Boolean, default=False) 
+
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
 
     # Зв'язки

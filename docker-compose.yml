@@ -7,6 +7,8 @@ services:
     restart: always
     ports:
       - "5000:5000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - .:/app
       - /var/run/docker.sock:/var/run/docker.sock
@@ -42,5 +44,21 @@ services:
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
 
+  caddy:
+    image: caddy:2.7
+    container_name: panel_proxy
+    restart: always
+    ports:
+      - "80:80"    
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
