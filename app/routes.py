@@ -43,7 +43,11 @@ def admin_required(f):
             abort(403) # Повертає помилку 403 Forbidden
         return f(*args, **kwargs)
     return decorated_function
+
 # --- МАРШРУТИ ---
+@bp.app_context_processor
+def inject_public_ip():
+    return dict(public_ip=current_app.config['PUBLIC_IP'])
 
 @bp.route('/')
 def index():
@@ -577,3 +581,5 @@ def toggle_approve(user_id):
     status = "схвалено" if user.is_approved else "заблоковано"
     flash(f'Користувача {user.username} {status}.', 'success')
     return redirect(url_for('main.admin_users'))
+
+

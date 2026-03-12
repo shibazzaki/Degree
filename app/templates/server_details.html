@@ -22,7 +22,7 @@
             <div class="card-header">Інформація</div>
             <ul class="list-group list-group-flush">
                 <li class="list-group-item bg-dark text-white">Status: <span id="status-badge" class="badge bg-info">{{ server.status }}</span></li>
-                <li class="list-group-item bg-dark text-white">IP: 127.0.0.1</li>
+                <li class="list-group-item bg-dark text-white">IP: <strong class="text-info">{{ public_ip }}</strong></li>
                 <li class="list-group-item bg-dark text-white">Ports:
                     {% for internal, external in server.assigned_ports.items() %}
                         <span class="badge bg-primary">{{ external }}</span>
