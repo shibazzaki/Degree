@@ -328,7 +328,7 @@ def server_logs(server_id):
     try:
         container = client.containers.get(f"server_{server.uuid}")
         # Отримуємо останні 100 рядків логів
-        logs = container.logs(tail=100).decode('utf-8')
+        logs = container.logs(tail=100).decode('utf-8', errors='replace')
         return jsonify({'logs': logs, 'status': container.status})
     except Exception as e:
         return jsonify({'logs': f"Error fetching logs: {e}", 'status': 'unknown'})
@@ -393,7 +393,7 @@ def download_logs(server_id):
     try:
         container = client.containers.get(f"server_{server.uuid}")
         # Беремо всі логи з контейнера (не тільки останні 100)
-        logs = container.logs().decode('utf-8')
+        logs = container.logs().decode('utf-8', errors='replace')
 
         # Повертаємо текстовий файл "на льоту"
         return Response(

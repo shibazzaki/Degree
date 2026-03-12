@@ -1,12 +1,14 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
+from flask_wtf.csrf import CSRFProtect
 from config import Config
 
 db = SQLAlchemy()
 login_manager = LoginManager()
-# ВАЖЛИВО: Оновлюємо назву view для логіну (додаємо main.)
 login_manager.login_view = 'main.login'
+
+csrf = CSRFProtect()
 
 
 def create_app():
@@ -15,6 +17,7 @@ def create_app():
 
     db.init_app(app)
     login_manager.init_app(app)
+    csrf.init_app(app)
 
     with app.app_context():
         from . import models

@@ -35,6 +35,7 @@
          <div class="card-header">Налаштування гри</div>
          <div class="card-body p-3">
              <form action="{{ url_for('main.update_settings', server_id=server.id) }}" method="POST">
+                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                  {% for key, value in server.env_vars.items() %}
                  <div class="mb-2">
                      <label class="form-label text-white small mb-1">{{ key }}</label>
@@ -121,7 +122,8 @@
         fetch("{{ url_for('main.send_rcon', server_id=server.id) }}", {
             method: "POST",
             headers: {
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "X-CSRFToken": "{{ csrf_token() }}"
             },
             body: JSON.stringify({command: cmd})
         })
