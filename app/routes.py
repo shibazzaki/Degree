@@ -247,7 +247,7 @@ def logout():
 def server_details(server_id):
     server = GameServer.query.get_or_404(server_id)
     # Перевірка прав доступу (щоб не лазили в чужі сервери)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
     return render_template('server_details.html', server=server)
 
@@ -256,7 +256,7 @@ def server_details(server_id):
 @login_required
 def server_action(server_id, action):
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
 
     client = docker.from_env()
@@ -326,7 +326,7 @@ def server_action(server_id, action):
 @login_required
 def delete_server(server_id):
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
 
     client = docker.from_env()
@@ -355,7 +355,7 @@ def delete_server(server_id):
 def server_logs(server_id):
     """AJAX маршрут для отримання логів"""
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         return jsonify({'error': 'Access denied'}), 403
 
     client = docker.from_env()
@@ -373,7 +373,7 @@ def server_logs(server_id):
 def server_stats(server_id):
     """Отримує метрики CPU та RAM напряму від Docker API"""
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         return jsonify({'status': 'error', 'message': 'Access denied'}), 403
 
     client = docker.from_env()
@@ -420,7 +420,7 @@ def server_stats(server_id):
 @login_required
 def download_logs(server_id):
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
 
     client = docker.from_env()
@@ -444,7 +444,7 @@ def download_logs(server_id):
 @login_required
 def send_rcon(server_id):
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         return jsonify({'status': 'error', 'message': 'Access denied'}), 403
 
     command = request.json.get('command')
@@ -488,7 +488,7 @@ def send_rcon(server_id):
 @login_required
 def update_settings(server_id):
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
 
     # Збираємо всі поля з форми, окрім CSRF токенів
@@ -511,7 +511,7 @@ def update_settings(server_id):
 @login_required
 def server_config(server_id):
     server = GameServer.query.get_or_404(server_id)
-    if server.owner_id != current_user.id:
+    if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
 
     client = docker.from_env()
@@ -581,5 +581,14 @@ def toggle_approve(user_id):
     status = "схвалено" if user.is_approved else "заблоковано"
     flash(f'Користувача {user.username} {status}.', 'success')
     return redirect(url_for('main.admin_users'))
+
+@bp.route('/admin/servers')
+@login_required
+@admin_required
+def admin_servers():
+    # Беремо всі сервери з бази
+    all_servers = GameServer.query.all()
+    return render_template('admin_servers.html', servers=all_servers)
+
 
 

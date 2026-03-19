@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h2>🖥 Управління всіма серверами (Адмін)</h2>
+    </div>
+</div>
+
+<div class="card bg-dark border-secondary">
+    <div class="card-body p-0">
+        <table class="table table-dark table-hover mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Назва сервера</th>
+                    <th>Гра</th>
+                    <th>Власник</th>
+                    <th>Статус</th>
+                    <th>RAM</th>
+                    <th>Дії</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in servers %}
+                <tr>
+                    <td>{{ s.id }}</td>
+                    <td class="fw-bold">{{ s.name }}</td>
+                    <td>{{ s.template.name }}</td>
+                    <td class="text-info">@{{ s.owner.username }}</td>
+                    <td>
+                        <span class="badge {% if s.status == 'running' %}bg-success{% elif s.status == 'stopped' %}bg-danger{% else %}bg-warning{% endif %}">
+                            {{ s.status }}
+                        </span>
+                    </td>
+                    <td>{{ s.allocated_ram }} MB</td>
+                    <td>
+                        <a href="{{ url_for('main.server_details', server_id=s.id) }}" class="btn btn-sm btn-primary">Управління</a>
+                        <a href="{{ url_for('main.delete_server', server_id=s.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Ви впевнені? Це видалить сервер користувача!');">Видалити</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center text-muted py-4">Жодного сервера ще не створено.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
