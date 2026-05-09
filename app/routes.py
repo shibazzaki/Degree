@@ -124,6 +124,8 @@ def create_server():
 
 
 @bp.route('/seed_db')
+@login_required
+@admin_required
 def seed_db():
     games = [
         {
@@ -277,10 +279,6 @@ def server_action(server_id, action):
             container.restart()
             server.status = 'running'
             flash('Сервер перезавантажено.', 'info')
-        elif action == 'kill':
-            container.kill()
-            server.status = 'stopped'
-            flash('Сервер примусово вбито.', 'danger')
         elif action == 'kill':
             container.kill()
             server.status = 'stopped'
