@@ -589,4 +589,3 @@ def admin_servers():
     return render_template('admin_servers.html', servers=all_servers)
 
 
-
