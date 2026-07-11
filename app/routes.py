@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, abort, Response, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from . import db, login_manager
 from .models import User, GameServer, GameTemplate
 from .forms import LoginForm, RegistrationForm, CreateServerForm
@@ -11,6 +12,8 @@ from mcrcon import MCRcon
 import os
 import requests
 import base64
+import io
+import tarfile
 from functools import wraps
 
 
@@ -29,6 +32,40 @@ def find_free_port():
         sock.close()
         if result != 0:  # Порт вільний
             return port
+
+
+# Папки Minecraft-сервера, доступні для завантаження .jar файлів.
+# Жорсткий whitelist: користувач ніяк не може вказати іншу папку.
+MC_JAR_FOLDERS = {
+    'plugins': '/data/plugins',  # Paper / Spigot / Purpur
+    'mods': '/data/mods',        # Forge / Fabric
+}
+MAX_JAR_SIZE = 50 * 1024 * 1024  # 50 MB на один .jar
+
+
+def list_jars(container, folder):
+    """Повертає відсортований список .jar файлів у папці контейнера.
+
+    Якщо контейнер запущений — через exec_run (швидко).
+    Якщо зупинений — через get_archive (Docker API дозволяє читати
+    файлову систему навіть зупиненого контейнера).
+    """
+    path = MC_JAR_FOLDERS[folder]
+    try:
+        if container.status == 'running':
+            exit_code, output = container.exec_run(["ls", "-1", path])
+            if exit_code != 0:
+                return []
+            names = output.decode('utf-8', errors='replace').splitlines()
+        else:
+            stream, _ = container.get_archive(path)
+            buf = io.BytesIO(b''.join(stream))
+            with tarfile.open(fileobj=buf) as tar:
+                names = [os.path.basename(m.name) for m in tar.getmembers() if m.isfile()]
+        return sorted(n for n in names if n.lower().endswith('.jar'))
+    except Exception:
+        # Папки ще немає (сервер жодного разу не стартував з Paper) — це не помилка
+        return []
 
 
 @login_manager.user_loader
@@ -251,7 +288,19 @@ def server_details(server_id):
     # Перевірка прав доступу (щоб не лазили в чужі сервери)
     if server.owner_id != current_user.id and current_user.role != 'admin':
         abort(403)
-    return render_template('server_details.html', server=server)
+
+    # Для Minecraft показуємо вміст plugins/ та mods/
+    is_minecraft = 'Minecraft' in server.template.name
+    jar_folders = {}
+    if is_minecraft:
+        try:
+            container = docker.from_env().containers.get(f"server_{server.uuid}")
+            jar_folders = {name: list_jars(container, name) for name in MC_JAR_FOLDERS}
+        except docker.errors.NotFound:
+            jar_folders = {name: [] for name in MC_JAR_FOLDERS}
+
+    return render_template('server_details.html', server=server,
+                           is_minecraft=is_minecraft, jar_folders=jar_folders)
 
 
 @bp.route('/server/<int:server_id>/<action>')
@@ -500,6 +549,161 @@ def update_settings(server_id):
     db.session.commit()
 
     flash("Налаштування збережено! Щоб вони запрацювали, натисніть 'Rebuild' (Перезібрати).", "success")
+    return redirect(url_for('main.server_details', server_id=server.id))
+
+
+# --- ПЛАГІНИ ТА МОДИ (Minecraft) ---
+
+@bp.route('/server/<int:server_id>/plugins/upload', methods=['POST'])
+@login_required
+def upload_plugin(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        abort(403)
+    if 'Minecraft' not in server.template.name:
+        abort(400)
+
+    # 1. Валідація папки призначення (тільки whitelist)
+    folder = request.form.get('folder', 'plugins')
+    if folder not in MC_JAR_FOLDERS:
+        abort(400)
+
+    # 2. Валідація файлу
+    file = request.files.get('file')
+    if not file or not file.filename:
+        flash('Файл не вибрано.', 'warning')
+        return redirect(url_for('main.server_details', server_id=server.id))
+
+    # secure_filename прибирає '../', слеші та інші небезпечні символи
+    filename = secure_filename(file.filename)
+    if not filename or not filename.lower().endswith('.jar'):
+        flash('Дозволені тільки файли з розширенням .jar.', 'danger')
+        return redirect(url_for('main.server_details', server_id=server.id))
+
+    data = file.read()
+    if len(data) > MAX_JAR_SIZE:
+        flash(f'Файл завеликий. Максимум — {MAX_JAR_SIZE // (1024 * 1024)} MB.', 'danger')
+        return redirect(url_for('main.server_details', server_id=server.id))
+    # .jar — це zip-архів, він завжди починається з сигнатури "PK"
+    if not data.startswith(b'PK'):
+        flash('Файл не схожий на справжній .jar (zip) архів.', 'danger')
+        return redirect(url_for('main.server_details', server_id=server.id))
+
+    # 3. Кладемо файл у контейнер через Docker API (працює навіть якщо він зупинений)
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+
+        # Пакуємо jar у tar в пам'яті: put_archive приймає тільки tar-архіви
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w') as tar:
+            dir_info = tarfile.TarInfo(name=folder)
+            dir_info.type = tarfile.DIRTYPE
+            dir_info.mode = 0o755
+            dir_info.uid = dir_info.gid = 1000  # користувач minecraft в образі itzg
+            tar.addfile(dir_info)
+
+            info = tarfile.TarInfo(name=f"{folder}/{filename}")
+            info.size = len(data)
+            info.mode = 0o644
+            info.uid = info.gid = 1000
+            tar.addfile(info, io.BytesIO(data))
+        buf.seek(0)
+        container.put_archive('/data', buf)
+
+        if request.form.get('restart') and container.status == 'running':
+            container.restart()
+            flash(f'"{filename}" завантажено у {folder}/. Сервер перезапускається...', 'success')
+        else:
+            flash(f'"{filename}" завантажено у {folder}/. Натисніть Restart, щоб сервер його підхопив.', 'success')
+
+    except docker.errors.NotFound:
+        flash('Контейнер не знайдено! Можливо, він був видалений вручну.', 'danger')
+    except Exception as e:
+        flash(f'Помилка завантаження: {e}', 'danger')
+
+    return redirect(url_for('main.server_details', server_id=server.id))
+
+
+@bp.route('/server/<int:server_id>/plugins/delete', methods=['POST'])
+@login_required
+def delete_plugin(server_id):
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        abort(403)
+
+    folder = request.form.get('folder', 'plugins')
+    if folder not in MC_JAR_FOLDERS:
+        abort(400)
+
+    # Та сама санітизація, що і при завантаженні — видалити можна тільки .jar у whitelist-папці
+    filename = secure_filename(request.form.get('filename', ''))
+    if not filename or not filename.lower().endswith('.jar'):
+        abort(400)
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+        if container.status != 'running':
+            flash('Видалення файлів працює тільки на запущеному сервері. Натисніть Start.', 'warning')
+            return redirect(url_for('main.server_details', server_id=server.id))
+
+        # Список аргументів (без shell) — ін'єкція команд неможлива
+        exit_code, output = container.exec_run(["rm", f"{MC_JAR_FOLDERS[folder]}/{filename}"])
+        if exit_code == 0:
+            flash(f'"{filename}" видалено. Натисніть Restart, щоб зміни застосувались.', 'success')
+        else:
+            flash(f'Не вдалося видалити: {output.decode("utf-8", errors="replace")}', 'danger')
+
+    except docker.errors.NotFound:
+        flash('Контейнер не знайдено!', 'danger')
+    except Exception as e:
+        flash(f'Помилка видалення: {e}', 'danger')
+
+    return redirect(url_for('main.server_details', server_id=server.id))
+
+
+@bp.route('/server/<int:server_id>/download_world')
+@login_required
+def download_world(server_id):
+    """Скачує папку світу як .tar архів (бекап). Працює і на зупиненому сервері."""
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        abort(403)
+    if 'Minecraft' not in server.template.name:
+        abort(400)
+
+    client = docker.from_env()
+    try:
+        container = client.containers.get(f"server_{server.uuid}")
+        # get_archive повертає потік tar-архіву — віддаємо його напряму, без буферизації в RAM
+        stream, _ = container.get_archive('/data/world')
+        return Response(
+            stream,
+            mimetype='application/x-tar',
+            headers={"Content-disposition": f"attachment; filename=world_{server.uuid}.tar"}
+        )
+    except docker.errors.NotFound:
+        flash('Світ ще не створено або контейнер не знайдено.', 'warning')
+    except Exception as e:
+        flash(f'Помилка завантаження світу: {e}', 'danger')
+    return redirect(url_for('main.server_details', server_id=server.id))
+
+
+@bp.route('/server/<int:server_id>/enable_paper', methods=['POST'])
+@login_required
+def enable_paper(server_id):
+    """Перемикає ядро Minecraft на Paper (підтримка плагінів). Світ зберігається."""
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        abort(403)
+    if 'Minecraft' not in server.template.name:
+        abort(400)
+
+    # JSONB не відстежує зміни всередині dict — тому створюємо новий
+    server.env_vars = {**(server.env_vars or {}), 'TYPE': 'PAPER'}
+    db.session.commit()
+    flash("TYPE=PAPER збережено. Натисніть 'Rebuild' — сервер перезбереться з ядром Paper, світ залишиться.", 'success')
     return redirect(url_for('main.server_details', server_id=server.id))
 
 

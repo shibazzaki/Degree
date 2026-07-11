@@ -47,6 +47,71 @@
          </div>
      </div>
 
+        {% if is_minecraft %}
+        <div class="card bg-dark border-secondary mb-3">
+            <div class="card-header">🔌 Плагіни та моди</div>
+            <div class="card-body p-3">
+                {% set mc_type = (server.env_vars or {}).get('TYPE', '') | upper %}
+                {% if mc_type in ['', 'VANILLA'] %}
+                <div class="alert alert-warning p-2 small mb-3">
+                    Ванільне ядро не підтримує плагіни. Потрібне ядро <strong>Paper</strong> —
+                    ваш поточний світ при цьому збережеться.
+                    <form action="{{ url_for('main.enable_paper', server_id=server.id) }}" method="POST" class="mt-2 mb-0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        <button type="submit" class="btn btn-sm btn-warning w-100">Увімкнути Paper (TYPE=PAPER)</button>
+                    </form>
+                </div>
+                {% endif %}
+
+                <form action="{{ url_for('main.upload_plugin', server_id=server.id) }}" method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                    <div class="mb-2">
+                        <select name="folder" class="form-select form-select-sm bg-secondary text-white border-0">
+                            <option value="plugins">plugins/ (Paper, Spigot)</option>
+                            <option value="mods">mods/ (Forge, Fabric)</option>
+                        </select>
+                    </div>
+                    <div class="mb-2">
+                        <input type="file" name="file" accept=".jar" required
+                               class="form-control form-control-sm bg-secondary text-white border-0">
+                    </div>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" name="restart" id="restart-after-upload" checked>
+                        <label class="form-check-label small text-white" for="restart-after-upload">
+                            Перезапустити сервер після завантаження
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-sm btn-primary w-100">⬆ Завантажити .jar (до 50 MB)</button>
+                </form>
+
+                {% for folder, jars in jar_folders.items() %}
+                    {% if jars %}
+                    <hr class="border-secondary my-2">
+                    <div class="small text-muted mb-1">{{ folder }}/</div>
+                    <ul class="list-group list-group-flush">
+                        {% for jar in jars %}
+                        <li class="list-group-item bg-dark text-white d-flex justify-content-between align-items-center px-0 py-1">
+                            <span class="small text-truncate me-2" title="{{ jar }}">{{ jar }}</span>
+                            <form action="{{ url_for('main.delete_plugin', server_id=server.id) }}" method="POST"
+                                  class="mb-0" onsubmit="return confirm('Видалити {{ jar }}?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                                <input type="hidden" name="folder" value="{{ folder }}">
+                                <input type="hidden" name="filename" value="{{ jar }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-1">✖</button>
+                            </form>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                {% endfor %}
+
+                <hr class="border-secondary my-2">
+                <a href="{{ url_for('main.download_world', server_id=server.id) }}"
+                   class="btn btn-sm btn-outline-info w-100">⬇ Завантажити світ (.tar)</a>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="card bg-dark border-secondary mb-3">
             <div class="card-header">Використання RAM (MB)</div>
             <div class="card-body p-2">
