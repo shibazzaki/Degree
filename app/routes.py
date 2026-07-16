@@ -43,6 +43,20 @@ MC_JAR_FOLDERS = {
 MAX_JAR_SIZE = 50 * 1024 * 1024  # 50 MB на один .jar
 
 
+def build_environment(server):
+    """Env для контейнера: конфіг з БД + автоматичний розмір хіпа JVM для Minecraft.
+
+    mem_limit обмежує лише контейнер — сам образ itzg без env MEMORY
+    ставить JVM всього -Xmx1G. Тому якщо користувач не задав памʼять явно,
+    даємо хіпу 75% від виділеного RAM (решта — на off-heap: netty, metaspace).
+    """
+    env = dict(server.env_vars or {})
+    if 'Minecraft' in server.template.name and not any(
+            k in env for k in ('MEMORY', 'MAX_MEMORY', 'INIT_MEMORY')):
+        env['MEMORY'] = f"{int(server.allocated_ram * 0.75)}M"
+    return env
+
+
 def list_jars(container, folder):
     """Повертає відсортований список .jar файлів у папці контейнера.
 
@@ -141,7 +155,7 @@ def create_server():
                 detach=True,
                 name=f"server_{new_server.uuid}",
                 ports=docker_ports,
-                environment=new_server.env_vars,  # <--- Беремо конфіг з БД
+                environment=build_environment(new_server),  # конфіг з БД + авто-Xmx
                 mem_limit=f"{form.ram.data}m",
                 volumes={volume_name: {'bind': bind_path, 'mode': 'rw'}},  # <--- ДАНІ ТЕПЕР У БЕЗПЕЦІ
                 restart_policy={"Name": "on-failure"}
@@ -349,7 +363,7 @@ def server_action(server_id, action):
                 detach=True,
                 name=container_name,
                 ports=docker_ports,
-                environment=server.env_vars,  # Беремо свіжі налаштування з БД
+                environment=build_environment(server),  # свіжі налаштування з БД + авто-Xmx
                 mem_limit=f"{server.allocated_ram}m",
                 volumes={volume_name: {'bind': bind_path, 'mode': 'rw'}},
                 restart_policy={"Name": "on-failure"}
