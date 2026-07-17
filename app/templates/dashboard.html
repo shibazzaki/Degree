@@ -21,8 +21,12 @@
                 <p class="card-text">
                     <strong>Ports:</strong>
                     {% for internal, external in server.assigned_ports.items() %}
-                        <span class="badge bg-dark">{{ external }}</span>
+                        {% if internal != '8100' %}<span class="badge bg-dark">{{ external }}</span>{% endif %}
                     {% endfor %}
+                    {% if server.assigned_ports.get('8100') %}
+                        <a href="http://{{ public_ip }}:{{ server.assigned_ports['8100'] }}" target="_blank"
+                           class="badge bg-info text-decoration-none">🗺 мапа :{{ server.assigned_ports['8100'] }}</a>
+                    {% endif %}
                     <br>
                     <strong>RAM:</strong> {{ server.allocated_ram }} MB
                 </p>

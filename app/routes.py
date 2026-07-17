@@ -9,6 +9,8 @@ import docker
 import socket
 import random
 import re
+import json
+from urllib.parse import urlparse
 from mcrcon import MCRcon
 import os
 import requests
@@ -42,6 +44,46 @@ MC_JAR_FOLDERS = {
     'mods': '/data/mods',        # Forge / Fabric
 }
 MAX_JAR_SIZE = 50 * 1024 * 1024  # 50 MB на один .jar
+
+MODRINTH_UA = {'User-Agent': 'shibazzaki/game-panel (shibazzaki.space)'}
+
+
+def put_jar(container, folder, filename, data):
+    """Кладе .jar у папку контейнера через Docker API (працює і на зупиненому).
+
+    put_archive приймає тільки tar-архіви, тому пакуємо jar у tar в пам'яті.
+    """
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w') as tar:
+        dir_info = tarfile.TarInfo(name=folder)
+        dir_info.type = tarfile.DIRTYPE
+        dir_info.mode = 0o755
+        dir_info.uid = dir_info.gid = 1000  # користувач minecraft в образі itzg
+        tar.addfile(dir_info)
+
+        info = tarfile.TarInfo(name=f"{folder}/{filename}")
+        info.size = len(data)
+        info.mode = 0o644
+        info.uid = info.gid = 1000
+        tar.addfile(info, io.BytesIO(data))
+    buf.seek(0)
+    container.put_archive('/data', buf)
+
+
+def modrinth_loaders(server, folder):
+    """Які loader-и Modrinth сумісні з цим сервером.
+
+    plugins/ — Paper їсть плагіни всієї Bukkit-сім'ї.
+    mods/ — залежить від ядра (TYPE), якщо невідомо — шукаємо по всіх.
+    """
+    if folder == 'plugins':
+        return ['paper', 'spigot', 'bukkit', 'purpur']
+    mc_type = (server.env_vars or {}).get('TYPE', '').upper()
+    return {
+        'FABRIC': ['fabric'],
+        'FORGE': ['forge'],
+        'NEOFORGE': ['neoforge'],
+    }.get(mc_type, ['fabric', 'forge', 'neoforge'])
 
 
 def build_environment(server):
@@ -124,6 +166,10 @@ def create_server():
 
         env_vars = dict(template.default_env_vars or {})
 
+        # Складність (env DIFFICULTY розуміє тільки образ Minecraft)
+        if 'Minecraft' in template.name and form.difficulty.data:
+            env_vars['DIFFICULTY'] = form.difficulty.data
+
         # Якщо вибрано модпак — itzg/minecraft-server сам його скачає і встановить
         modpack_slug = (form.modpack_slug.data or '').strip()
         if modpack_slug and 'Minecraft' in template.name:
@@ -168,6 +214,12 @@ def create_server():
                 docker_ports[port_key] = current_external_port
                 assigned_ports_db[internal_port] = current_external_port
                 current_external_port += 1
+
+            # Minecraft: одразу публікуємо порт веб-мапи BlueMap (8100 у контейнері),
+            # щоб у кожного сервера була своя адреса мапи
+            if 'Minecraft' in template.name:
+                docker_ports['8100/tcp'] = current_external_port
+                assigned_ports_db['8100'] = current_external_port
 
             new_server.assigned_ports = assigned_ports_db
 
@@ -440,6 +492,12 @@ def server_action(server_id, action):
             # Створюємо новий з новими налаштуваннями
             bind_path = '/data' if 'Minecraft' in server.template.name else '/home/steam/Zomboid'
             volume_name = f"server_data_{server.uuid}"
+
+            # Старим Minecraft-серверам (створеним до фічі мапи) виділяємо
+            # порт BlueMap при перезбірці — контейнер все одно пересоздається
+            if 'Minecraft' in server.template.name and '8100' not in server.assigned_ports:
+                server.assigned_ports = {**server.assigned_ports, '8100': find_free_port()}
+
             docker_ports = {f"{k}/udp" if 'Zomboid' in server.template.name else f"{k}/tcp": v for k, v in
                             server.assigned_ports.items()}
 
@@ -692,23 +750,7 @@ def upload_plugin(server_id):
     client = docker.from_env()
     try:
         container = client.containers.get(f"server_{server.uuid}")
-
-        # Пакуємо jar у tar в пам'яті: put_archive приймає тільки tar-архіви
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode='w') as tar:
-            dir_info = tarfile.TarInfo(name=folder)
-            dir_info.type = tarfile.DIRTYPE
-            dir_info.mode = 0o755
-            dir_info.uid = dir_info.gid = 1000  # користувач minecraft в образі itzg
-            tar.addfile(dir_info)
-
-            info = tarfile.TarInfo(name=f"{folder}/{filename}")
-            info.size = len(data)
-            info.mode = 0o644
-            info.uid = info.gid = 1000
-            tar.addfile(info, io.BytesIO(data))
-        buf.seek(0)
-        container.put_archive('/data', buf)
+        put_jar(container, folder, filename, data)
 
         if request.form.get('restart') and container.status == 'running':
             container.restart()
@@ -762,6 +804,141 @@ def delete_plugin(server_id):
     return redirect(url_for('main.server_details', server_id=server.id))
 
 
+@bp.route('/server/<int:server_id>/plugins/search')
+@login_required
+def search_plugins(server_id):
+    """Пошук окремих плагінів (Paper) або модів (Fabric/Forge) на Modrinth.
+
+    На відміну від /api/modpacks/search, шукає не збірки, а поодинокі
+    проєкти, і фільтрує їх під ядро конкретного сервера.
+    """
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        return jsonify({'error': 'Access denied'}), 403
+
+    folder = request.args.get('folder', 'plugins')
+    if folder not in MC_JAR_FOLDERS:
+        return jsonify({'error': 'Некоректна папка'}), 400
+    query = (request.args.get('q') or '').strip()
+    if len(query) < 2:
+        return jsonify({'results': []})
+
+    project_type = 'plugin' if folder == 'plugins' else 'mod'
+    facets = json.dumps([
+        [f'project_type:{project_type}'],
+        # Всередині однієї групи — АБО: підійде будь-який сумісний loader
+        [f'categories:{loader}' for loader in modrinth_loaders(server, folder)],
+        ['server_side:required', 'server_side:optional'],
+    ])
+    try:
+        resp = requests.get(
+            'https://api.modrinth.com/v2/search',
+            headers=MODRINTH_UA,
+            params={'query': query, 'limit': 8, 'facets': facets},
+            timeout=10)
+        resp.raise_for_status()
+        results = [{
+            'slug': hit['slug'],
+            'name': hit['title'],
+            'description': hit.get('description', ''),
+            'downloads': hit.get('downloads', 0),
+            'icon': hit.get('icon_url', ''),
+        } for hit in resp.json().get('hits', [])]
+        return jsonify({'results': results})
+    except requests.RequestException as e:
+        return jsonify({'error': f'Помилка запиту до Modrinth: {e}'}), 502
+
+
+@bp.route('/server/<int:server_id>/plugins/install', methods=['POST'])
+@login_required
+def install_plugin(server_id):
+    """Скачує з Modrinth останню сумісну версію плагіна/мода і кладе в контейнер."""
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        return jsonify({'error': 'Access denied'}), 403
+    if 'Minecraft' not in server.template.name:
+        return jsonify({'error': 'Доступно тільки для Minecraft'}), 400
+
+    payload = request.get_json(silent=True) or {}
+    folder = payload.get('folder', 'plugins')
+    slug = (payload.get('slug') or '').strip()
+    if folder not in MC_JAR_FOLDERS or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', slug):
+        return jsonify({'error': 'Некоректний запит'}), 400
+
+    try:
+        # 1. Список версій проєкту, відфільтрований під ядро сервера.
+        #    Modrinth повертає їх від найновішої до найстарішої.
+        params = {'loaders': json.dumps(modrinth_loaders(server, folder))}
+        game_version = (server.env_vars or {}).get('VERSION', '')
+        if game_version and game_version.upper() != 'LATEST':
+            params['game_versions'] = json.dumps([game_version])
+
+        def fetch_versions():
+            resp = requests.get(f'https://api.modrinth.com/v2/project/{slug}/version',
+                                headers=MODRINTH_UA, params=params, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+
+        versions = fetch_versions()
+        matched_exact = True
+        if not versions and 'game_versions' in params:
+            # Збірки під точну версію сервера немає. Bukkit API зазвичай
+            # зворотно-сумісний, тому фолбек: найновіша збірка під це ядро,
+            # але з чесним попередженням користувачу.
+            params.pop('game_versions')
+            matched_exact = False
+            versions = fetch_versions()
+        if not versions:
+            return jsonify({'error': 'Немає версії, сумісної з ядром цього сервера.'}), 404
+
+        files = versions[0].get('files') or []
+        file_info = next((f for f in files if f.get('primary')), files[0] if files else None)
+        if not file_info:
+            return jsonify({'error': 'У релізі немає файлів.'}), 404
+
+        filename = secure_filename(file_info.get('filename', ''))
+        url = file_info.get('url', '')
+        if not filename.lower().endswith('.jar'):
+            return jsonify({'error': 'Файл релізу — не .jar.'}), 400
+        # Скачуємо тільки з CDN Modrinth — жодних довільних URL
+        if urlparse(url).hostname != 'cdn.modrinth.com':
+            return jsonify({'error': 'Недовірене джерело файлу.'}), 400
+        if file_info.get('size', 0) > MAX_JAR_SIZE:
+            return jsonify({'error': f'Файл більший за {MAX_JAR_SIZE // (1024 * 1024)} MB.'}), 400
+
+        # 2. Скачуємо .jar (та сама валідація, що й при ручному завантаженні)
+        dl = requests.get(url, headers=MODRINTH_UA, timeout=30)
+        dl.raise_for_status()
+        data = dl.content
+        if len(data) > MAX_JAR_SIZE or not data.startswith(b'PK'):
+            return jsonify({'error': 'Скачаний файл не пройшов перевірку.'}), 400
+    except requests.RequestException as e:
+        return jsonify({'error': f'Помилка запиту до Modrinth: {e}'}), 502
+
+    # 3. Кладемо в контейнер
+    try:
+        container = docker.from_env().containers.get(f"server_{server.uuid}")
+        put_jar(container, folder, filename, data)
+
+        plugin_versions = ', '.join(versions[0].get('game_versions', [])[-3:]) or '?'
+        warn = ('' if matched_exact else
+                f' ⚠ Збірки під {game_version} немає — встановлено версію для {plugin_versions}. '
+                'Часто працює, але не тестовано: перевірте лог після рестарту.')
+        category = 'success' if matched_exact else 'warning'
+        if payload.get('restart') and container.status == 'running':
+            container.restart()
+            flash(f'"{filename}" ({versions[0].get("version_number", "?")}) встановлено у {folder}/. '
+                  f'Сервер перезапускається...{warn}', category)
+        else:
+            flash(f'"{filename}" встановлено у {folder}/. Натисніть Restart, щоб сервер його підхопив.'
+                  f'{warn}', category)
+        return jsonify({'ok': True})
+    except docker.errors.NotFound:
+        return jsonify({'error': 'Контейнер не знайдено!'}), 404
+    except Exception as e:
+        return jsonify({'error': f'Помилка встановлення: {e}'}), 500
+
+
 @bp.route('/server/<int:server_id>/download_world')
 @login_required
 def download_world(server_id):
@@ -808,6 +985,43 @@ def enable_paper(server_id):
 
 # --- РЕДАКТОР КОНФІГІВ ---
 
+# Розширення текстових конфігів, які можна редагувати через веб
+MC_CONFIG_EXTENSIONS = ('.properties', '.yml', '.yaml', '.conf', '.json', '.toml', '.txt')
+
+
+def safe_mc_config_path(rel_path):
+    """Перетворює відносний шлях з запиту на безпечний абсолютний шлях у /data.
+
+    Шлях потрапляє у shell-команду всередині контейнера, тому фільтр
+    жорсткий: тільки [A-Za-z0-9._/-], без '..', без порожніх сегментів,
+    тільки дозволені розширення.
+    """
+    if not rel_path or not re.fullmatch(r'[A-Za-z0-9._][A-Za-z0-9._/-]*', rel_path):
+        return None
+    if any(seg in ('', '.', '..') for seg in rel_path.split('/')):
+        return None
+    if not rel_path.lower().endswith(MC_CONFIG_EXTENSIONS):
+        return None
+    return f'/data/{rel_path}'
+
+
+def list_mc_config_files(container):
+    """Список редагованих конфігів у /data (без світів, бібліотек і кешів)."""
+    if container.status != 'running':
+        return []
+    name_filter = ' -o '.join(f"-name '*{ext}'" for ext in MC_CONFIG_EXTENSIONS)
+    exit_code, output = container.exec_run(
+        ["sh", "-c",
+         f"find /data -maxdepth 4 \\( {name_filter} \\) "
+         "-not -path '/data/world*' -not -path '/data/libraries/*' "
+         "-not -path '/data/cache/*' -not -path '/data/versions/*' "
+         "-not -path '/data/logs/*' -type f 2>/dev/null | sort"])
+    if exit_code != 0:
+        return []
+    return [line[len('/data/'):] for line in output.decode('utf-8', errors='replace').splitlines()
+            if line.startswith('/data/')]
+
+
 @bp.route('/server/<int:server_id>/config', methods=['GET', 'POST'])
 @login_required
 def server_config(server_id):
@@ -823,8 +1037,13 @@ def server_config(server_id):
         return redirect(url_for('main.server_details', server_id=server.id))
 
     # Визначаємо шлях до конфігу залежно від гри
+    config_files = []
     if 'Minecraft' in server.template.name:
-        config_path = '/data/server.properties'
+        # Будь-який текстовий конфіг у /data — server.properties, конфіги плагінів тощо
+        config_path = safe_mc_config_path(request.args.get('path', 'server.properties'))
+        if not config_path:
+            abort(400)
+        config_files = list_mc_config_files(container)
     else:
         # Для Zomboid назва файлу залежить від SERVER_NAME
         server_name = server.env_vars.get('SERVER_NAME', 'servertest')
@@ -842,11 +1061,12 @@ def server_config(server_id):
             exit_code, output = container.exec_run(write_cmd)
 
             if exit_code == 0:
-                flash('Конфігурацію збережено! Натисніть Restart, щоб гра її підтягнула.', 'success')
+                flash('Конфігурацію збережено! Натисніть Restart (для BlueMap досить "/bluemap reload").', 'success')
             else:
                 flash(f'Помилка збереження: {output.decode("utf-8")}', 'danger')
 
-        return redirect(url_for('main.server_config', server_id=server.id))
+        return redirect(url_for('main.server_config', server_id=server.id,
+                                path=request.args.get('path')))
 
     # GET ЗАПИТ: Читаємо поточний файл
     exit_code, output = container.exec_run(f"cat \"{config_path}\"")
@@ -855,7 +1075,8 @@ def server_config(server_id):
     else:
         config_content = f"# Файл {config_path} ще не створено.\n# Дочекайтеся повного завантаження сервера (генерації світу), а потім оновіть сторінку."
 
-    return render_template('config_editor.html', server=server, config_content=config_content, config_path=config_path)
+    return render_template('config_editor.html', server=server, config_content=config_content,
+                           config_path=config_path, config_files=config_files)
 
 
 # --- ПАНЕЛЬ АДМІНІСТРАТОРА ---

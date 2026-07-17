@@ -8,6 +8,24 @@
     </div>
 </div>
 
+{% if config_files %}
+<div class="row mb-3">
+    <div class="col-md-6">
+        <select id="config-file-select" class="form-select bg-dark text-white border-secondary">
+            {% for f in config_files %}
+            <option value="{{ f }}" {% if '/data/' + f == config_path %}selected{% endif %}>{{ f }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+<script>
+    document.getElementById('config-file-select').addEventListener('change', function () {
+        window.location = "{{ url_for('main.server_config', server_id=server.id) }}" +
+            '?path=' + encodeURIComponent(this.value);
+    });
+</script>
+{% endif %}
+
 <div class="row">
     <div class="col-md-12">
         <div class="card bg-dark border-secondary">

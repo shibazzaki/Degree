@@ -25,9 +25,15 @@
                 <li class="list-group-item bg-dark text-white">IP: <strong class="text-info">{{ public_ip }}</strong></li>
                 <li class="list-group-item bg-dark text-white">Ports:
                     {% for internal, external in server.assigned_ports.items() %}
-                        <span class="badge bg-primary">{{ external }}</span>
+                        {% if internal != '8100' %}<span class="badge bg-primary">{{ external }}</span>{% endif %}
                     {% endfor %}
                 </li>
+                {% if is_minecraft and server.assigned_ports.get('8100') %}
+                <li class="list-group-item bg-dark text-white">🗺 Мапа (BlueMap):
+                    <a href="http://{{ public_ip }}:{{ server.assigned_ports['8100'] }}"
+                       target="_blank" class="text-info">{{ public_ip }}:{{ server.assigned_ports['8100'] }}</a>
+                </li>
+                {% endif %}
                 <li class="list-group-item bg-dark text-white">Max RAM: {{ server.allocated_ram }} MB</li>
             </ul>
         </div>
@@ -63,14 +69,23 @@
                 </div>
                 {% endif %}
 
+                <div class="mb-2">
+                    <select id="jar-folder" class="form-select form-select-sm bg-secondary text-white border-0">
+                        <option value="plugins">plugins/ (Paper, Spigot)</option>
+                        <option value="mods">mods/ (Forge, Fabric)</option>
+                    </select>
+                </div>
+
+                <div class="mb-2">
+                    <input type="text" id="plugin-search" autocomplete="off"
+                           class="form-control form-control-sm bg-secondary text-white border-0"
+                           placeholder="🔍 Пошук на Modrinth (напр. EssentialsX)...">
+                </div>
+                <div class="list-group mb-2" id="plugin-search-results"></div>
+
                 <form action="{{ url_for('main.upload_plugin', server_id=server.id) }}" method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-                    <div class="mb-2">
-                        <select name="folder" class="form-select form-select-sm bg-secondary text-white border-0">
-                            <option value="plugins">plugins/ (Paper, Spigot)</option>
-                            <option value="mods">mods/ (Forge, Fabric)</option>
-                        </select>
-                    </div>
+                    <input type="hidden" name="folder" id="jar-folder-hidden" value="plugins">
                     <div class="mb-2">
                         <input type="file" name="file" accept=".jar" required
                                class="form-control form-control-sm bg-secondary text-white border-0">
@@ -298,5 +313,107 @@
 
     // Запускаємо оновлення графіків кожні 5 секунд
     setInterval(updateStats, 5000);
+
+    // --- ПОШУК ПЛАГІНІВ/МОДІВ НА MODRINTH ---
+    (function () {
+        const input = document.getElementById('plugin-search');
+        if (!input) return; // не Minecraft — блоку немає
+        const resultsBox = document.getElementById('plugin-search-results');
+        const folderSelect = document.getElementById('jar-folder');
+        const folderHidden = document.getElementById('jar-folder-hidden');
+        let debounceTimer = null;
+
+        // Спільний селектор папки: синхронізуємо з формою ручного завантаження
+        folderSelect.addEventListener('change', function () {
+            folderHidden.value = folderSelect.value;
+            if (input.value.trim().length >= 2) search();
+        });
+
+        function fmtDownloads(n) {
+            if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+            if (n >= 1e3) return (n / 1e3).toFixed(0) + 'k';
+            return String(n);
+        }
+
+        function install(item, btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳';
+            fetch("{{ url_for('main.install_plugin', server_id=server.id) }}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': "{{ csrf_token() }}"
+                },
+                body: JSON.stringify({
+                    slug: item.slug,
+                    folder: folderSelect.value,
+                    restart: document.getElementById('restart-after-upload').checked
+                })
+            })
+            .then(r => r.json().then(data => ({ok: r.ok, data: data})))
+            .then(res => {
+                if (res.ok) {
+                    location.reload(); // flash-повідомлення і список .jar оновляться
+                } else {
+                    alert(res.data.error || 'Помилка встановлення');
+                    btn.disabled = false;
+                    btn.textContent = '＋';
+                }
+            })
+            .catch(() => {
+                alert('Помилка мережі');
+                btn.disabled = false;
+                btn.textContent = '＋';
+            });
+        }
+
+        function render(items) {
+            resultsBox.innerHTML = '';
+            if (!items.length) {
+                resultsBox.innerHTML = '<div class="list-group-item bg-dark text-muted small py-1">Нічого не знайдено</div>';
+                return;
+            }
+            items.forEach(function (item) {
+                const row = document.createElement('div');
+                row.className = 'list-group-item bg-dark text-white d-flex align-items-center gap-2 px-2 py-1';
+                row.title = item.description;
+                const icon = item.icon
+                    ? '<img src="' + item.icon + '" width="24" height="24" class="rounded" alt="">'
+                    : '<span style="width:24px"></span>';
+                row.innerHTML = icon +
+                    '<span class="flex-grow-1 text-truncate small"><strong></strong></span>' +
+                    '<span class="badge bg-secondary">⬇ ' + fmtDownloads(item.downloads) + '</span>' +
+                    '<button type="button" class="btn btn-sm btn-outline-success py-0 px-1" title="Встановити">＋</button>';
+                row.querySelector('strong').textContent = item.name;
+                const btn = row.querySelector('button');
+                btn.addEventListener('click', function () { install(item, btn); });
+                resultsBox.appendChild(row);
+            });
+        }
+
+        function search() {
+            const q = input.value.trim();
+            if (q.length < 2) { resultsBox.innerHTML = ''; return; }
+            fetch("{{ url_for('main.search_plugins', server_id=server.id) }}" +
+                  '?folder=' + folderSelect.value + '&q=' + encodeURIComponent(q))
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        resultsBox.innerHTML = '<div class="list-group-item bg-dark text-danger small py-1"></div>';
+                        resultsBox.firstChild.textContent = data.error;
+                    } else {
+                        render(data.results);
+                    }
+                })
+                .catch(() => {
+                    resultsBox.innerHTML = '<div class="list-group-item bg-dark text-danger small py-1">Помилка пошуку</div>';
+                });
+        }
+
+        input.addEventListener('input', function () {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(search, 400);
+        });
+    })();
 </script>
 {% endblock %}

@@ -17,6 +17,12 @@
                         {{ form.game_id(class="form-select") }}
                     </div>
 
+                    <!-- Складність (тільки для Minecraft) -->
+                    <div class="mb-3" id="difficulty-section" style="display: none;">
+                        {{ form.difficulty.label(class="form-label") }}
+                        {{ form.difficulty(class="form-select") }}
+                    </div>
+
                     <!-- Пошук модпаків (тільки для Minecraft) -->
                     <div class="mb-3" id="modpack-section" style="display: none;">
                         <label class="form-label">Модпак (необов'язково)</label>
@@ -75,7 +81,9 @@
     }
 
     function toggleSection() {
-        section.style.display = isMinecraft() ? '' : 'none';
+        const show = isMinecraft() ? '' : 'none';
+        section.style.display = show;
+        document.getElementById('difficulty-section').style.display = show;
         if (!isMinecraft()) clearSelection();
     }
 
