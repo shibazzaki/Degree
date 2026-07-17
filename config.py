@@ -10,5 +10,9 @@ class Config:
 
     RCON_PASSWORD = os.environ.get('RCON_PASSWORD') or 'admin'
 
+    # Ключ CurseForge API (безкоштовний, console.curseforge.com).
+    # Без нього працює тільки пошук модпаків на Modrinth.
+    CF_API_KEY = os.environ.get('CF_API_KEY') or ''
+
     # Глобальний ліміт розміру HTTP-запиту (захист від завеликих аплоадів)
     MAX_CONTENT_LENGTH = 64 * 1024 * 1024  # 64 MB

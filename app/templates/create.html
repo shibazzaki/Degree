@@ -16,15 +16,137 @@
                         {{ form.game_id.label(class="form-label") }}
                         {{ form.game_id(class="form-select") }}
                     </div>
+
+                    <!-- Пошук модпаків (тільки для Minecraft) -->
+                    <div class="mb-3" id="modpack-section" style="display: none;">
+                        <label class="form-label">Модпак (необов'язково)</label>
+                        <div class="input-group mb-2">
+                            <select class="form-select" id="modpack-platform" style="max-width: 130px;">
+                                <option value="modrinth" selected>Modrinth</option>
+                                <option value="curseforge">CurseForge</option>
+                            </select>
+                            <input type="text" class="form-control" id="modpack-search"
+                                   placeholder="Назва модпака, напр. Cobbleverse..." autocomplete="off">
+                        </div>
+                        <div class="list-group" id="modpack-results"></div>
+                        <div class="alert alert-info d-flex justify-content-between align-items-center py-2 mt-2"
+                             id="modpack-selected" style="display: none !important;">
+                            <span id="modpack-selected-name"></span>
+                            <button type="button" class="btn-close" id="modpack-clear" aria-label="Прибрати"></button>
+                        </div>
+                        <div class="form-text text-light">
+                            Сервер сам скачає і встановить пак при першому запуску.
+                            Для модпаків радимо 4096+ MB RAM.
+                        </div>
+                    </div>
+
                     <div class="mb-3">
                         {{ form.ram.label(class="form-label") }}
                         {{ form.ram(class="form-control") }}
                         <div class="form-text text-light">Рекомендовано мінімум 1024 MB для Minecraft.</div>
                     </div>
+                    {{ form.modpack_platform() }}
+                    {{ form.modpack_slug() }}
                     {{ form.submit(class="btn btn-success w-100") }}
                 </form>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+(function () {
+    const gameSelect = document.getElementById('game_id');
+    const section = document.getElementById('modpack-section');
+    const platformSelect = document.getElementById('modpack-platform');
+    const searchInput = document.getElementById('modpack-search');
+    const resultsBox = document.getElementById('modpack-results');
+    const selectedBox = document.getElementById('modpack-selected');
+    const selectedName = document.getElementById('modpack-selected-name');
+    const clearBtn = document.getElementById('modpack-clear');
+    const hiddenPlatform = document.getElementById('modpack_platform');
+    const hiddenSlug = document.getElementById('modpack_slug');
+    const ramInput = document.getElementById('ram');
+    let debounceTimer = null;
+
+    function isMinecraft() {
+        const opt = gameSelect.options[gameSelect.selectedIndex];
+        return opt && opt.text.includes('Minecraft');
+    }
+
+    function toggleSection() {
+        section.style.display = isMinecraft() ? '' : 'none';
+        if (!isMinecraft()) clearSelection();
+    }
+
+    function clearSelection() {
+        hiddenPlatform.value = '';
+        hiddenSlug.value = '';
+        selectedBox.style.setProperty('display', 'none', 'important');
+        resultsBox.innerHTML = '';
+        searchInput.value = '';
+    }
+
+    function fmtDownloads(n) {
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+        if (n >= 1e3) return (n / 1e3).toFixed(0) + 'k';
+        return String(n);
+    }
+
+    function renderResults(items) {
+        resultsBox.innerHTML = '';
+        items.forEach(function (item) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'list-group-item list-group-item-action d-flex align-items-center gap-2';
+            const icon = item.icon
+                ? '<img src="' + item.icon + '" width="32" height="32" class="rounded" alt="">'
+                : '<span style="width:32px"></span>';
+            btn.innerHTML = icon +
+                '<span class="flex-grow-1 text-truncate">' +
+                '<strong></strong><br><small class="text-muted desc"></small></span>' +
+                '<span class="badge bg-dark">⬇ ' + fmtDownloads(item.downloads) + '</span>';
+            btn.querySelector('strong').textContent = item.name;
+            btn.querySelector('.desc').textContent = item.description;
+            btn.addEventListener('click', function () {
+                hiddenPlatform.value = item.platform;
+                hiddenSlug.value = item.slug;
+                selectedName.textContent = item.name + ' (' + item.platform + ')';
+                selectedBox.style.setProperty('display', 'flex', 'important');
+                resultsBox.innerHTML = '';
+                searchInput.value = '';
+                if (parseInt(ramInput.value || '0', 10) < 4096) ramInput.value = 4096;
+            });
+            resultsBox.appendChild(btn);
+        });
+    }
+
+    function search() {
+        const q = searchInput.value.trim();
+        if (q.length < 2) { resultsBox.innerHTML = ''; return; }
+        fetch('/api/modpacks/search?platform=' + platformSelect.value + '&q=' + encodeURIComponent(q))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.error) {
+                    resultsBox.innerHTML = '<div class="list-group-item text-danger"></div>';
+                    resultsBox.firstChild.textContent = data.error;
+                } else {
+                    renderResults(data.results);
+                }
+            })
+            .catch(function () {
+                resultsBox.innerHTML = '<div class="list-group-item text-danger">Помилка пошуку</div>';
+            });
+    }
+
+    searchInput.addEventListener('input', function () {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(search, 400);
+    });
+    platformSelect.addEventListener('change', search);
+    gameSelect.addEventListener('change', toggleSection);
+    clearBtn.addEventListener('click', clearSelection);
+    toggleSection();
+})();
+</script>
 {% endblock %}

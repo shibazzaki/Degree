@@ -8,6 +8,7 @@ from .forms import LoginForm, RegistrationForm, CreateServerForm
 import docker
 import socket
 import random
+import re
 from mcrcon import MCRcon
 import os
 import requests
@@ -54,6 +55,9 @@ def build_environment(server):
     if 'Minecraft' in server.template.name and not any(
             k in env for k in ('MEMORY', 'MAX_MEMORY', 'INIT_MEMORY')):
         env['MEMORY'] = f"{int(server.allocated_ram * 0.75)}M"
+    # Ключ CurseForge не зберігаємо в БД — підставляємо тільки в env контейнера
+    if env.get('TYPE') == 'AUTO_CURSEFORGE' and not env.get('CF_API_KEY'):
+        env['CF_API_KEY'] = current_app.config['CF_API_KEY']
     return env
 
 
@@ -118,6 +122,27 @@ def create_server():
         template = GameTemplate.query.get(form.game_id.data)
         external_port = find_free_port()
 
+        env_vars = dict(template.default_env_vars or {})
+
+        # Якщо вибрано модпак — itzg/minecraft-server сам його скачає і встановить
+        modpack_slug = (form.modpack_slug.data or '').strip()
+        if modpack_slug and 'Minecraft' in template.name:
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', modpack_slug):
+                flash('Некоректний ідентифікатор модпака.', 'danger')
+                return render_template('create.html', form=form)
+
+            env_vars.pop('VERSION', None)  # версію Minecraft диктує модпак
+            if form.modpack_platform.data == 'curseforge':
+                if not current_app.config['CF_API_KEY']:
+                    flash('CurseForge вимкнено: додайте CF_API_KEY у .env панелі. '
+                          'Або виберіть модпак з Modrinth.', 'danger')
+                    return render_template('create.html', form=form)
+                env_vars['TYPE'] = 'AUTO_CURSEFORGE'
+                env_vars['CF_SLUG'] = modpack_slug
+            else:
+                env_vars['TYPE'] = 'MODRINTH'
+                env_vars['MODRINTH_MODPACK'] = modpack_slug
+
         # 1. Створюємо запис у БД
         new_server = GameServer(
             name=form.name.data,
@@ -125,7 +150,7 @@ def create_server():
             template_id=template.id,
             allocated_ram=form.ram.data,
             assigned_ports={'main': external_port},  # Тимчасовий запис
-            env_vars=template.default_env_vars,  # <--- ЗБЕРІГАЄМО КОНФІГ В БД
+            env_vars=env_vars,  # <--- ЗБЕРІГАЄМО КОНФІГ В БД
             status='starting'
         )
         db.session.add(new_server)
@@ -172,6 +197,66 @@ def create_server():
             flash(f'Помилка запуску Docker: {e}', 'danger')
 
     return render_template('create.html', form=form)
+
+
+@bp.route('/api/modpacks/search')
+@login_required
+def search_modpacks():
+    """Пошук модпаків для форми створення сервера.
+
+    Modrinth — відкритий API без ключа. CurseForge — потребує CF_API_KEY
+    у конфігу панелі. Відповідь нормалізується до єдиного формату,
+    щоб фронтенду було байдуже, звідки прийшов пак.
+    """
+    query = (request.args.get('q') or '').strip()
+    platform = request.args.get('platform', 'modrinth')
+    if len(query) < 2:
+        return jsonify({'results': []})
+
+    try:
+        if platform == 'curseforge':
+            api_key = current_app.config['CF_API_KEY']
+            if not api_key:
+                return jsonify({'error': 'CF_API_KEY не налаштовано в .env панелі'}), 400
+            resp = requests.get(
+                'https://api.curseforge.com/v1/mods/search',
+                # Без осмисленого User-Agent Cloudflare перед CF API повертає 403
+                headers={'x-api-key': api_key,
+                         'User-Agent': 'shibazzaki/game-panel (shibazzaki.space)'},
+                params={'gameId': 432, 'classId': 4471,  # 432 = Minecraft, 4471 = Modpacks
+                        'searchFilter': query, 'sortField': 2, 'sortOrder': 'desc',
+                        'pageSize': 8},
+                timeout=10)
+            resp.raise_for_status()
+            results = [{
+                'platform': 'curseforge',
+                'slug': hit['slug'],
+                'name': hit['name'],
+                'description': hit.get('summary', ''),
+                'downloads': hit.get('downloadCount', 0),
+                'icon': (hit.get('logo') or {}).get('thumbnailUrl', ''),
+            } for hit in resp.json().get('data', [])]
+        else:
+            resp = requests.get(
+                'https://api.modrinth.com/v2/search',
+                headers={'User-Agent': 'shibazzaki/game-panel (shibazzaki.space)'},
+                params={'query': query, 'limit': 8,
+                        'facets': '[["project_type:modpack"],'
+                                  '["server_side:required","server_side:optional"]]'},
+                timeout=10)
+            resp.raise_for_status()
+            results = [{
+                'platform': 'modrinth',
+                'slug': hit['slug'],
+                'name': hit['title'],
+                'description': hit.get('description', ''),
+                'downloads': hit.get('downloads', 0),
+                'icon': hit.get('icon_url', ''),
+            } for hit in resp.json().get('hits', [])]
+
+        return jsonify({'results': results})
+    except requests.RequestException as e:
+        return jsonify({'error': f'Помилка запиту до {platform}: {e}'}), 502
 
 
 @bp.route('/seed_db')
