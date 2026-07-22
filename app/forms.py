@@ -25,6 +25,13 @@ class CreateServerForm(FlaskForm):
         ('normal', 'Normal (звичайна)'),
         ('hard', 'Hard (складна)'),
     ])
+    # Версія Java (тільки Minecraft) — тег образу itzg. Старі паки (1.12.2) = Java 8
+    java = SelectField('Версія Java', default='auto', choices=[
+        ('auto', 'Авто (за версією гри)'),
+        ('java8', 'Java 8 (старі паки: 1.12.2 і старіші, напр. SkyFactory 4)'),
+        ('java17', 'Java 17 (1.17–1.20)'),
+        ('java21', 'Java 21 (1.21+)'),
+    ])
     # Заповнюються JS-пошуком модпаків на сторінці створення (тільки Minecraft)
     modpack_platform = HiddenField()
     modpack_slug = HiddenField()

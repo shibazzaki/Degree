@@ -70,20 +70,128 @@ def put_jar(container, folder, filename, data):
     container.put_archive('/data', buf)
 
 
+def _detect_from_container(server):
+    """(loader|None, версія_MC|None) з файлів реально встановленого паку.
+
+    Для модпаків (TYPE=AUTO_CURSEFORGE/MODRINTH) лоадер і версія не задані в env —
+    їх диктує пак. Лоадер вгадуємо за іменами jar у mods/ (перемога більшістю),
+    версію Minecraft беремо точну з libraries/net/minecraft/server/.
+    """
+    try:
+        container = docker.from_env().containers.get(f"server_{server.uuid}")
+    except Exception:
+        return None, None
+
+    # Лоадер — за іменами модів. 'neoforge' перевіряємо ДО 'forge' (містить його).
+    counts = {'neoforge': 0, 'fabric': 0, 'forge': 0}
+    for n in list_jars(container, 'mods'):
+        low = n.lower()
+        if 'neoforge' in low:
+            counts['neoforge'] += 1
+        elif 'fabric' in low:
+            counts['fabric'] += 1
+        elif 'forge' in low:
+            counts['forge'] += 1
+    best = max(counts, key=counts.get)
+    loader = best if counts[best] > 0 else None
+
+    # Точна версія Minecraft — лише коли контейнер запущено (дешевий ls)
+    version = None
+    try:
+        if container.status == 'running':
+            code, out = container.exec_run(["ls", "/data/libraries/net/minecraft/server"])
+            if code == 0:
+                for name in out.decode('utf-8', 'replace').split():
+                    if re.fullmatch(r'1\.\d+(?:\.\d+)?', name):
+                        version = name
+                        break
+    except Exception:
+        pass
+    return loader, version
+
+
+def detect_runtime(server):
+    """(список loader-ів для Modrinth, версія_MC|None) для Minecraft-сервера.
+
+    Пріоритет: явні TYPE/VERSION з env -> закешоване автовизначення
+    (_LOADER/_MCVER) -> одноразове визначення з встановленого паку (кешуємо в БД).
+    """
+    env = server.env_vars or {}
+    explicit = {
+        'FABRIC': ['fabric'], 'FORGE': ['forge'], 'NEOFORGE': ['neoforge'],
+    }.get(env.get('TYPE', '').upper())
+    version = env.get('VERSION', '')
+    version = version if version and version.upper() != 'LATEST' else None
+
+    loader = env.get('_LOADER')
+    mcver = env.get('_MCVER')
+
+    # Чогось бракує і це не ванільний сервер із явним ядром — визначаємо з паку
+    if not (explicit or loader) or not (version or mcver):
+        d_loader, d_version = _detect_from_container(server)
+        updates = {}
+        if d_loader and not loader:
+            updates['_LOADER'] = loader = d_loader
+        if d_version and not mcver:
+            updates['_MCVER'] = mcver = d_version
+        if updates:
+            server.env_vars = {**env, **updates}
+            db.session.commit()
+
+    loaders = explicit or ([loader] if loader else ['fabric', 'forge', 'neoforge'])
+    return loaders, version or mcver
+
+
 def modrinth_loaders(server, folder):
     """Які loader-и Modrinth сумісні з цим сервером.
 
     plugins/ — Paper їсть плагіни всієї Bukkit-сім'ї.
-    mods/ — залежить від ядра (TYPE), якщо невідомо — шукаємо по всіх.
+    mods/ — визначаємо ядро сервера (у т.ч. з встановленого модпаку).
     """
     if folder == 'plugins':
         return ['paper', 'spigot', 'bukkit', 'purpur']
-    mc_type = (server.env_vars or {}).get('TYPE', '').upper()
-    return {
-        'FABRIC': ['fabric'],
-        'FORGE': ['forge'],
-        'NEOFORGE': ['neoforge'],
-    }.get(mc_type, ['fabric', 'forge', 'neoforge'])
+    return detect_runtime(server)[0]
+
+
+# Теги образу itzg/minecraft-server із потрібною версією Java.
+# Ключі — те, що зберігаємо в env_vars['_JAVA'] (панельний, не йде в контейнер).
+JAVA_IMAGE_TAGS = ('auto', 'java8', 'java17', 'java21')
+
+
+def java_tag_for_mc_version(version):
+    """Мажорна версія Minecraft -> тег Java-образу itzg (або None, якщо не вгадали).
+
+    Старий Forge (<=1.16) кастить системний класлоадер у URLClassLoader —
+    це працює тільки на Java 8. 1.17–1.20 — Java 17, 1.21+ — Java 21.
+    """
+    m = re.match(r'1\.(\d+)', (version or '').strip())
+    if not m:
+        return None
+    minor = int(m.group(1))
+    if minor <= 16:
+        return 'java8'
+    if minor <= 20:
+        return 'java17'
+    return 'java21'
+
+
+def resolve_image(server):
+    """Образ Docker для сервера з підібраною версією Java (тільки Minecraft).
+
+    Пріоритет: ручний вибір користувача (env_vars['_JAVA']) -> авто за версією
+    Minecraft (env VERSION). Якщо у template.docker_image вже є тег — не чіпаємо.
+    Так старі паки (1.12.2 тощо) не падають на дефолтній Java 25.
+    """
+    base = server.template.docker_image
+    if 'Minecraft' not in server.template.name or ':' in base:
+        return base
+    env = server.env_vars or {}
+    tag = env.get('_JAVA')
+    if not tag or tag == 'auto':
+        tag = java_tag_for_mc_version(env.get('VERSION', ''))
+    if tag and tag != 'auto':
+        return f"{base}:{tag}"
+    return base
 
 
 def build_environment(server):
@@ -93,7 +201,8 @@ def build_environment(server):
     ставить JVM всього -Xmx1G. Тому якщо користувач не задав памʼять явно,
     даємо хіпу 75% від виділеного RAM (решта — на off-heap: netty, metaspace).
     """
-    env = dict(server.env_vars or {})
+    # Ключі з '_' — панельні (напр. _JAVA), в контейнер їх не передаємо
+    env = {k: v for k, v in (server.env_vars or {}).items() if not k.startswith('_')}
     if 'Minecraft' in server.template.name and not any(
             k in env for k in ('MEMORY', 'MAX_MEMORY', 'INIT_MEMORY')):
         env['MEMORY'] = f"{int(server.allocated_ram * 0.75)}M"
@@ -170,6 +279,10 @@ def create_server():
         if 'Minecraft' in template.name and form.difficulty.data:
             env_vars['DIFFICULTY'] = form.difficulty.data
 
+        # Версія Java (панельний ключ _JAVA — підбирає тег образу itzg)
+        if 'Minecraft' in template.name and form.java.data in JAVA_IMAGE_TAGS:
+            env_vars['_JAVA'] = form.java.data
+
         # Якщо вибрано модпак — itzg/minecraft-server сам його скачає і встановить
         modpack_slug = (form.modpack_slug.data or '').strip()
         if modpack_slug and 'Minecraft' in template.name:
@@ -228,7 +341,7 @@ def create_server():
             volume_name = f"server_data_{new_server.uuid}"
 
             container = client.containers.run(
-                image=template.docker_image,
+                image=resolve_image(new_server),
                 detach=True,
                 name=f"server_{new_server.uuid}",
                 ports=docker_ports,
@@ -502,7 +615,7 @@ def server_action(server_id, action):
                             server.assigned_ports.items()}
 
             client.containers.run(
-                image=server.template.docker_image,
+                image=resolve_image(server),
                 detach=True,
                 name=container_name,
                 ports=docker_ports,
@@ -701,6 +814,11 @@ def update_settings(server_id):
         if key != 'csrf_token':
             updated_env[key] = value
 
+    # Панельні ключі (_JAVA тощо) у формі не рендеряться — зберігаємо їх
+    for key, value in (server.env_vars or {}).items():
+        if key.startswith('_'):
+            updated_env.setdefault(key, value)
+
     # Оновлюємо JSON у базі
     server.env_vars = updated_env
     db.session.commit()
@@ -866,11 +984,12 @@ def install_plugin(server_id):
         return jsonify({'error': 'Некоректний запит'}), 400
 
     try:
-        # 1. Список версій проєкту, відфільтрований під ядро сервера.
+        # 1. Список версій проєкту, відфільтрований під ядро й версію сервера.
         #    Modrinth повертає їх від найновішої до найстарішої.
-        params = {'loaders': json.dumps(modrinth_loaders(server, folder))}
-        game_version = (server.env_vars or {}).get('VERSION', '')
-        if game_version and game_version.upper() != 'LATEST':
+        loaders = modrinth_loaders(server, folder)
+        _, game_version = detect_runtime(server)  # версія з паку (кеш _MCVER)
+        params = {'loaders': json.dumps(loaders)}
+        if game_version:
             params['game_versions'] = json.dumps([game_version])
 
         def fetch_versions():
@@ -980,6 +1099,28 @@ def enable_paper(server_id):
     server.env_vars = {**(server.env_vars or {}), 'TYPE': 'PAPER'}
     db.session.commit()
     flash("TYPE=PAPER збережено. Натисніть 'Rebuild' — сервер перезбереться з ядром Paper, світ залишиться.", 'success')
+    return redirect(url_for('main.server_details', server_id=server.id))
+
+
+@bp.route('/server/<int:server_id>/set_java', methods=['POST'])
+@login_required
+def set_java(server_id):
+    """Задає версію Java для сервера (тег образу itzg). Світ зберігається."""
+    server = GameServer.query.get_or_404(server_id)
+    if server.owner_id != current_user.id and current_user.role != 'admin':
+        abort(403)
+    if 'Minecraft' not in server.template.name:
+        abort(400)
+
+    java = request.form.get('java', 'auto')
+    if java not in JAVA_IMAGE_TAGS:
+        abort(400)
+
+    # JSONB не відстежує зміни всередині dict — створюємо новий
+    server.env_vars = {**(server.env_vars or {}), '_JAVA': java}
+    db.session.commit()
+    label = 'Авто (за версією гри)' if java == 'auto' else java
+    flash(f"Версію Java задано: {label}. Натисніть 'Rebuild', щоб застосувати (світ збережеться).", 'success')
     return redirect(url_for('main.server_details', server_id=server.id))
 
 

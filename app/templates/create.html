@@ -23,6 +23,17 @@
                         {{ form.difficulty(class="form-select") }}
                     </div>
 
+                    <!-- Версія Java (тільки для Minecraft) -->
+                    <div class="mb-3" id="java-section" style="display: none;">
+                        {{ form.java.label(class="form-label") }}
+                        {{ form.java(class="form-select") }}
+                        <div class="form-text text-light">
+                            «Авто» підбирає Java за версією гри. Для старих модпаків
+                            (SkyFactory 4 та інші на 1.12.2) вкажіть <strong>Java 8</strong> —
+                            інакше сервер не запуститься.
+                        </div>
+                    </div>
+
                     <!-- Пошук модпаків (тільки для Minecraft) -->
                     <div class="mb-3" id="modpack-section" style="display: none;">
                         <label class="form-label">Модпак (необов'язково)</label>
@@ -84,6 +95,7 @@
         const show = isMinecraft() ? '' : 'none';
         section.style.display = show;
         document.getElementById('difficulty-section').style.display = show;
+        document.getElementById('java-section').style.display = show;
         if (!isMinecraft()) clearSelection();
     }
 
